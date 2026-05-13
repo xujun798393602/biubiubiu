@@ -42,13 +42,18 @@ def _build_tree(folders: list, case_counts: dict, cases_by_folder: dict, parent_
                     "priority": c.priority,
                     "status": c.status,
                 })
+            # Count: direct cases + all descendant folder case counts
+            total = case_counts.get(f.id, 0)
+            for child in children:
+                if child.get("type") == "folder":
+                    total += child.get("case_count", 0)
             tree.append({
                 "id": str(f.id),
                 "name": f.name,
                 "type": "folder",
                 "parent_id": str(f.parent_id) if f.parent_id else None,
                 "sort_order": f.sort_order,
-                "case_count": case_counts.get(f.id, 0),
+                "case_count": total,
                 "children": children,
             })
     tree.sort(key=lambda x: x.get("sort_order", 0))
