@@ -31,3 +31,7 @@ export function updateCaseStatus(id: string, status: string) {
 export function exportCases(params: any) {
   return request.get('/cases/export', { params, responseType: 'blob' })
 }
+
+export function executeCases(caseIds: string[]) {
+  return request.post('/cases/execute', { case_ids: caseIds })
+}

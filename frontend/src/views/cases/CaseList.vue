@@ -2,7 +2,7 @@
   <div class="case-list">
     <el-card>
       <template #header>
-        <div class="card-header"><span>用例管理</span><el-button type="primary" icon="Plus" @click="handleCreate">新建用例</el-button></div>
+        <div class="card-header"><span>用例管理</span><div><el-button type="warning" icon="CaretRight" :disabled="!selectedCases.length" @click="handleBatchExecute">批量执行({{ selectedCases.length }})</el-button><el-button type="success" icon="VideoCamera" @click="showRecordDialog">用例录制</el-button><el-button type="primary" icon="Plus" @click="handleCreate">新建用例</el-button></div></div>
       </template>
       <el-form :inline="true" class="filter-form">
         <el-form-item label="类型"><el-select v-model="filters.type" style="width:140px" clearable placeholder="全部" @change="fetchData"><el-option label="API" value="API" /><el-option label="UI" value="UI" /><el-option label="性能" value="PERFORMANCE" /></el-select></el-form-item>
@@ -12,15 +12,17 @@
         <el-form-item label="搜索"><el-input v-model="filters.keyword" placeholder="用例名称/ID" clearable @clear="fetchData" /></el-form-item>
         <el-form-item><el-button type="primary" @click="fetchData">查询</el-button></el-form-item>
       </el-form>
-      <el-table :data="caseList" v-loading="loading" stripe border>
+      <el-table :data="caseList" v-loading="loading" stripe border @selection-change="handleSelectionChange">
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="id" label="用例ID" width="280" show-overflow-tooltip />
         <el-table-column prop="name" label="用例名称" min-width="200" show-overflow-tooltip />
         <el-table-column prop="type" label="类型" width="100"><template #default="{row}"><el-tag size="small">{{ row.type }}</el-tag></template></el-table-column>
         <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='BVT'?'danger':row.priority==='P0'?'danger':row.priority==='P1'?'warning':''" size="small">{{ row.priority }}</el-tag></template></el-table-column>
         <el-table-column prop="author" label="编写人" width="100" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='ACTIVE'?'success':row.status==='DEPRECATED'?'info':''" size="small">{{ row.status }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{row}">
+            <el-button text type="success" size="small" @click="handleExecute(row)">执行</el-button>
             <el-button text type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
             <el-popconfirm title="确认删除?" @confirm="handleDelete(row.id)"><template #reference><el-button text type="danger" size="small">删除</el-button></template></el-popconfirm>
           </template>
@@ -30,7 +32,7 @@
     </el-card>
 
     <!-- Create / Edit Dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用例' : '新建用例'" width="780px" destroy-on-close>
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑用例' : '新建用例'" width="780px" destroy-on-close draggable>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-tabs v-model="activeTab">
           <!-- Basic Info Tab -->
@@ -84,18 +86,51 @@
         <el-button type="primary" :loading="submitting" @click="handleSubmit">{{ isEdit ? '保存' : '创建' }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- Record Dialog -->
+    <el-dialog v-model="recordDialogVisible" title="用例录制" width="600px" draggable destroy-on-close>
+      <div class="record-panel">
+        <div v-if="!recording && !recordedScript" class="record-start">
+          <p>点击开始录制，将捕获浏览器操作并生成自动化脚本。</p>
+          <el-button type="danger" size="large" icon="VideoCamera" @click="startRecording">开始录制</el-button>
+        </div>
+        <div v-if="recording" class="record-active">
+          <div class="record-indicator">
+            <span class="record-dot"></span>
+            <span>录制中...</span>
+          </div>
+          <p>正在捕获浏览器操作，请在目标页面上执行操作。</p>
+          <el-button type="info" size="large" icon="VideoPause" @click="stopRecording">停止录制</el-button>
+        </div>
+        <div v-if="recordedScript && !recording" class="record-done">
+          <el-form-item label="绑定用例">
+            <el-select v-model="recordBindCaseId" placeholder="选择要绑定的用例" filterable style="width:100%">
+              <el-option v-for="c in caseList" :key="c.id" :label="`${c.name} (${c.id.slice(0,8)}...)`" :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="录制脚本">
+            <el-input v-model="recordedScript" type="textarea" :rows="10" readonly />
+          </el-form-item>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="recordDialogVisible = false">取消</el-button>
+        <el-button v-if="recordedScript && !recording" type="primary" :disabled="!recordBindCaseId" @click="bindRecordedScript">绑定到用例</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { getCaseList, createCase, updateCase, getCaseDetail, deleteCase, getCaseAuthors } from '@/api/cases'
+import { getCaseList, createCase, updateCase, getCaseDetail, deleteCase, getCaseAuthors, executeCases } from '@/api/cases'
 
 const loading = ref(false)
 const caseList = ref<any[]>([])
 const authorList = ref<string[]>([])
+const selectedCases = ref<any[]>([])
 const filters = reactive({ type: '', status: '', priority: '', author: '', keyword: '' })
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
 
@@ -109,6 +144,12 @@ const editingId = ref('')
 const submitting = ref(false)
 const formRef = ref<FormInstance>()
 const activeTab = ref('basic')
+
+// Record dialog state
+const recordDialogVisible = ref(false)
+const recording = ref(false)
+const recordedScript = ref('')
+const recordBindCaseId = ref('')
 
 const defaultForm = () => ({
   name: '',
@@ -279,6 +320,118 @@ async function handleDelete(id: string) {
   try { await deleteCase(id); ElMessage.success('删除成功'); fetchData() } catch {}
 }
 
+// Execution functions
+function handleSelectionChange(selection: any[]) {
+  selectedCases.value = selection
+}
+
+async function handleExecute(row: any) {
+  try {
+    await ElMessageBox.confirm(`确认执行用例"${row.name}"？`, '执行确认', { type: 'info' })
+    const res = await executeCases([row.id])
+    ElMessage.success('执行任务已创建')
+  } catch {}
+}
+
+async function handleBatchExecute() {
+  if (!selectedCases.value.length) return
+  try {
+    await ElMessageBox.confirm(`确认执行选中的 ${selectedCases.value.length} 个用例？`, '批量执行确认', { type: 'info' })
+    const ids = selectedCases.value.map(c => c.id)
+    const res = await executeCases(ids)
+    ElMessage.success('批量执行任务已创建')
+  } catch {}
+}
+
+// Recording functions
+const recordSteps = ref<Array<{ action: string; selector: string; value?: string }>>([])
+
+function showRecordDialog() {
+  recordedScript.value = ''
+  recordBindCaseId.value = ''
+  recording.value = false
+  recordSteps.value = []
+  recordDialogVisible.value = true
+}
+
+function getSelector(el: HTMLElement): string {
+  if (el.id) return `#${el.id}`
+  const name = (el as HTMLInputElement).name
+  if (name) return `[name="${name}"]`
+  const path: string[] = []
+  let current: HTMLElement | null = el
+  while (current && current !== document.body) {
+    let selector = current.tagName.toLowerCase()
+    if (current.className && typeof current.className === 'string') {
+      const cls = current.className.trim().split(/\s+/).slice(0, 2).join('.')
+      if (cls) selector += `.${cls}`
+    }
+    path.unshift(selector)
+    current = current.parentElement
+  }
+  return path.join(' > ')
+}
+
+function onRecordClick(e: MouseEvent) {
+  if (!recording.value) return
+  const target = e.target as HTMLElement
+  if (target.closest('.record-panel') || target.closest('.el-dialog')) return
+  recordSteps.value.push({ action: 'click', selector: getSelector(target) })
+}
+
+function onRecordInput(e: Event) {
+  if (!recording.value) return
+  const target = e.target as HTMLInputElement | HTMLTextAreaElement
+  if (target.closest('.record-panel') || target.closest('.el-dialog')) return
+  recordSteps.value.push({ action: 'fill', selector: getSelector(target), value: target.value })
+}
+
+function onRecordKeydown(e: KeyboardEvent) {
+  if (!recording.value) return
+  if (e.key === 'Enter') {
+    const target = e.target as HTMLElement
+    if (target.closest('.record-panel') || target.closest('.el-dialog')) return
+    recordSteps.value.push({ action: 'press', selector: getSelector(target), value: 'Enter' })
+  }
+}
+
+function startRecording() {
+  recording.value = true
+  recordSteps.value = []
+  document.addEventListener('click', onRecordClick, true)
+  document.addEventListener('input', onRecordInput, true)
+  document.addEventListener('keydown', onRecordKeydown, true)
+  ElMessage.info('录制已开始，请在页面上操作')
+}
+
+function stopRecording() {
+  recording.value = false
+  document.removeEventListener('click', onRecordClick, true)
+  document.removeEventListener('input', onRecordInput, true)
+  document.removeEventListener('keydown', onRecordKeydown, true)
+  // Generate Playwright script
+  const lines = recordSteps.value.map(step => {
+    if (step.action === 'click') return `  await page.locator('${step.selector}').click()`
+    if (step.action === 'fill') return `  await page.locator('${step.selector}').fill('${step.value}')`
+    if (step.action === 'press') return `  await page.locator('${step.selector}').press('${step.value}')`
+    return ''
+  })
+  recordedScript.value = `import { test, expect } from '@playwright/test'\n\ntest('recorded test', async ({ page }) => {\n  await page.goto('http://localhost')\n${lines.join('\n')}\n})`
+  ElMessage.success(`录制完成，共 ${recordSteps.value.length} 个步骤`)
+}
+
+async function bindRecordedScript() {
+  if (!recordBindCaseId.value || !recordedScript.value) return
+  try {
+    await updateCase(recordBindCaseId.value, { ui_script: recordedScript.value, ui_script_type: 'PLAYWRIGHT' })
+    ElMessage.success('脚本已绑定到用例')
+    recordDialogVisible.value = false
+    fetchData()
+  } catch {
+    ElMessage.error('绑定失败')
+  }
+}
+
 fetchData()
 fetchAuthors()
 </script>
@@ -287,4 +440,9 @@ fetchAuthors()
 .card-header { display:flex; align-items:center; justify-content:space-between; }
 .filter-form { margin-bottom:16px; }
 .pagination { margin-top:16px; display:flex; justify-content:flex-end; }
+.record-panel { text-align:center; padding:20px; }
+.record-start p, .record-active p, .record-done p { margin-bottom:20px; color:var(--el-text-color-secondary); }
+.record-indicator { display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:16px; font-size:18px; color:var(--el-color-danger); }
+.record-dot { width:12px; height:12px; border-radius:50%; background:var(--el-color-danger); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
 </style>

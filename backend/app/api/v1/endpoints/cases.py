@@ -1,15 +1,22 @@
 """Test case management endpoints."""
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_roles
-from app.models.test_case import TestCase
+from app.models.task import Task
+from app.models.test_case import TaskCase, TestCase
 from app.models.user import User
 from app.schemas.case import CaseCreate, CaseUpdate, CaseItem
 from app.schemas.common import ResponseModel
+
+
+class CaseExecuteRequest(BaseModel):
+    case_ids: List[str] = Field(..., min_length=1, max_length=100)
 
 router = APIRouter()
 
@@ -100,6 +107,39 @@ async def update_case(case_id: str, body: CaseUpdate, db: AsyncSession = Depends
     case.version += 1
     await db.commit()
     return ResponseModel(message="更新成功")
+
+
+@router.post("/execute", response_model=ResponseModel, status_code=201)
+async def execute_cases(
+    body: CaseExecuteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    # Validate all case_ids exist
+    existing = (await db.execute(
+        select(TestCase.id).where(TestCase.id.in_(body.case_ids), TestCase.deleted_at.is_(None))
+    )).scalars().all()
+    if len(existing) != len(body.case_ids):
+        raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "部分用例不存在"})
+
+    # Create task
+    task = Task(
+        name=f"快速执行 {len(body.case_ids)} 个用例",
+        description="从用例管理页面快速执行",
+        priority="MEDIUM",
+        execute_type="IMMEDIATE",
+        creator_id=current_user.id,
+        total_cases=len(body.case_ids),
+    )
+    db.add(task)
+    await db.flush()
+
+    # Add task-case associations
+    for i, case_id in enumerate(body.case_ids):
+        db.add(TaskCase(task_id=task.id, case_id=case_id, sort_order=i))
+
+    await db.commit()
+    return ResponseModel(data={"task_id": str(task.id), "message": f"已创建执行任务，共 {len(body.case_ids)} 个用例"})
 
 
 @router.delete("/{case_id}", response_model=ResponseModel)
