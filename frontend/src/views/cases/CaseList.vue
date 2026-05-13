@@ -454,11 +454,19 @@ async function handleNodeDrop(draggingNode: any, dropNode: any) {
 }
 
 function copyCaseName(name: string) {
-  navigator.clipboard.writeText(name).then(() => {
+  const textarea = document.createElement('textarea')
+  textarea.value = name
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
     ElMessage.success('已复制用例名称')
-  }).catch(() => {
+  } catch {
     ElMessage.error('复制失败')
-  })
+  }
+  document.body.removeChild(textarea)
 }
 
 // Folder functions
