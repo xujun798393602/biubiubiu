@@ -3,12 +3,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.database import get_engine, Base, get_session_factory
 from app.core.security import hash_password
 from app.models.user import User, Role, UserRole
+from app.models.test_case import CaseFolder, TestCase
 
 
 async def seed_default_admin():
@@ -38,6 +39,32 @@ async def seed_default_admin():
         await session.commit()
 
 
+async def ensure_default_folder():
+    """Create default folder and assign unmapped cases to it."""
+    async with get_session_factory()() as session:
+        # Check if default folder exists
+        default_folder = (await session.execute(
+            select(CaseFolder).where(CaseFolder.name == "默认文件夹", CaseFolder.deleted_at.is_(None))
+        )).scalar_one_or_none()
+
+        if not default_folder:
+            # Get any admin user as creator
+            admin = (await session.execute(select(User).limit(1))).scalar_one_or_none()
+            if not admin:
+                return
+            default_folder = CaseFolder(name="默认文件夹", creator_id=admin.id)
+            session.add(default_folder)
+            await session.flush()
+
+        # Assign all unmapped cases to default folder
+        await session.execute(
+            update(TestCase)
+            .where(TestCase.folder_id.is_(None), TestCase.deleted_at.is_(None))
+            .values(folder_id=default_folder.id)
+        )
+        await session.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -45,6 +72,7 @@ async def lifespan(app: FastAPI):
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await seed_default_admin()
+    await ensure_default_folder()
     yield
     # Shutdown
     await eng.dispose()

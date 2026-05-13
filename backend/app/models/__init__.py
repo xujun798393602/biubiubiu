@@ -1,5 +1,5 @@
 from app.models.user import User, Role, UserRole
-from app.models.test_case import TestCase, TaskCase
+from app.models.test_case import CaseFolder, TestCase, TaskCase
 from app.models.task import Task, TaskLog
 from app.models.result import TestResult, ResultShare
 from app.models.node import TestNode, NodeGroup
@@ -12,7 +12,7 @@ from app.models.enums import (
 
 __all__ = [
     "User", "Role", "UserRole",
-    "TestCase", "TaskCase",
+    "CaseFolder", "TestCase", "TaskCase",
     "Task", "TaskLog",
     "TestResult", "ResultShare",
     "TestNode", "NodeGroup",

@@ -3,12 +3,43 @@ from pydantic import BaseModel, Field
 from app.schemas.common import ItemBase
 
 
+# Folder schemas
+class FolderCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    parent_id: Optional[str] = None
+
+
+class FolderUpdate(BaseModel):
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
+
+
+class FolderItem(ItemBase):
+    id: str
+    name: str
+    parent_id: Optional[str] = None
+    sort_order: int = 0
+    creator_id: str
+    case_count: int = 0
+
+
+class FolderTreeItem(ItemBase):
+    id: str
+    name: str
+    parent_id: Optional[str] = None
+    sort_order: int = 0
+    case_count: int = 0
+    children: List["FolderTreeItem"] = []
+
+
+# Case schemas
 class CaseCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=256)
     description: Optional[str] = None
     type: Literal["UI", "API", "PERFORMANCE"]
     priority: str = "P2"
     module: Optional[str] = None
+    folder_id: Optional[str] = None
     tags: Optional[List[str]] = None
     author: Optional[str] = None
     preconditions: Optional[str] = None
@@ -46,6 +77,7 @@ class CaseUpdate(BaseModel):
     status: Optional[str] = None
     priority: Optional[str] = None
     module: Optional[str] = None
+    folder_id: Optional[str] = None
     tags: Optional[List[str]] = None
     author: Optional[str] = None
     preconditions: Optional[str] = None
@@ -83,6 +115,7 @@ class CaseItem(ItemBase):
     status: str
     priority: str
     module: Optional[str] = None
+    folder_id: Optional[str] = None
     tags: Optional[List[str]] = None
     author: Optional[str] = None
     preconditions: Optional[str] = None

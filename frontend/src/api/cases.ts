@@ -1,5 +1,6 @@
 import request from '@/utils/request'
 
+// Case CRUD
 export function getCaseList(params: any) {
   return request.get('/cases', { params })
 }
@@ -34,4 +35,42 @@ export function exportCases(params: any) {
 
 export function executeCases(caseIds: string[]) {
   return request.post('/cases/execute', { case_ids: caseIds })
+}
+
+export function copyCase(id: string) {
+  return request.post(`/cases/${id}/copy`)
+}
+
+// Folder CRUD
+export function getFolderTree() {
+  return request.get('/cases/folders/tree')
+}
+
+export function createFolder(data: { name: string; parent_id?: string }) {
+  return request.post('/cases/folders', data)
+}
+
+export function updateFolder(id: string, data: { name?: string; parent_id?: string }) {
+  return request.put(`/cases/folders/${id}`, data)
+}
+
+export function deleteFolder(id: string) {
+  return request.delete(`/cases/folders/${id}`)
+}
+
+export function copyFolder(id: string) {
+  return request.post(`/cases/folders/${id}/copy`)
+}
+
+// Trash
+export function getTrashList() {
+  return request.get('/cases/trash')
+}
+
+export function emptyTrash() {
+  return request.post('/cases/trash/empty')
+}
+
+export function restoreTrashItem(itemType: string, itemId: string) {
+  return request.post(`/cases/trash/restore/${itemType}/${itemId}`)
 }
