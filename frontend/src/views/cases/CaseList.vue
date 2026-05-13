@@ -1,113 +1,138 @@
 <template>
   <div class="case-list">
-    <!-- Left: Folder Sidebar -->
-    <div class="folder-sidebar">
-      <div class="sidebar-header">
-        <span>文件夹</span>
-        <el-button text type="primary" icon="Plus" @click="handleCreateRootFolder" />
-      </div>
-      <div class="sidebar-tree">
-        <el-tree
-          :data="folderTree"
-          node-key="id"
-          :props="{ label: 'name', children: 'children' }"
-          default-expand-all
-          highlight-current
-          @node-click="handleFolderClick"
-        >
-          <template #default="{ node, data }">
-            <div class="tree-node">
-              <el-icon><Folder /></el-icon>
-              <span class="node-label">{{ data.name }}</span>
-              <span class="node-count">{{ data.case_count }}</span>
-              <el-dropdown trigger="click" @command="(cmd: string) => handleFolderCommand(cmd, data)" @click.stop>
-                <el-icon class="node-more"><MoreFilled /></el-icon>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="addSub">新建子文件夹</el-dropdown-item>
-                    <el-dropdown-item command="rename">重命名</el-dropdown-item>
-                    <el-dropdown-item command="copy">复制</el-dropdown-item>
-                    <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-            </div>
-          </template>
-        </el-tree>
-      </div>
-      <div class="trash-node" :class="{ active: showTrash }" @click="handleTrashClick">
-        <el-icon><Delete /></el-icon>
-        <span>垃圾桶</span>
-        <span v-if="trashCount > 0" class="trash-count">{{ trashCount }}</span>
-      </div>
+    <!-- Top: Filters -->
+    <div class="filter-bar">
+      <el-form :inline="true" class="filter-form">
+        <el-form-item label="类型"><el-select v-model="filters.type" style="width:160px" clearable placeholder="全部" @change="fetchData"><el-option label="API" value="API" /><el-option label="UI" value="UI" /><el-option label="性能" value="PERFORMANCE" /></el-select></el-form-item>
+        <el-form-item label="状态"><el-select v-model="filters.status" style="width:160px" clearable placeholder="全部" @change="fetchData"><el-option label="草稿" value="DRAFT" /><el-option label="激活" value="ACTIVE" /><el-option label="废弃" value="DEPRECATED" /></el-select></el-form-item>
+        <el-form-item label="优先级"><el-select v-model="filters.priority" style="width:160px" clearable placeholder="全部" @change="fetchData"><el-option label="BVT" value="BVT" /><el-option label="P0" value="P0" /><el-option label="P1" value="P1" /><el-option label="P2" value="P2" /><el-option label="P3" value="P3" /></el-select></el-form-item>
+        <el-form-item label="编写人"><el-select v-model="filters.author" style="width:160px" clearable placeholder="全部" @change="fetchData"><el-option v-for="a in authorList" :key="a" :label="a" :value="a" /></el-select></el-form-item>
+        <el-form-item label="搜索"><el-input v-model="filters.keyword" placeholder="用例名称/ID" clearable @clear="fetchData" /></el-form-item>
+        <el-form-item><el-button type="primary" @click="fetchData">查询</el-button></el-form-item>
+      </el-form>
     </div>
 
-    <!-- Right: Content Area -->
-    <div class="case-content">
+    <!-- Middle/Lower: Integrated Folder Tree + Case Table -->
+    <div class="main-area">
       <!-- Trash View -->
-      <el-card v-if="showTrash">
-        <template #header>
-          <div class="card-header">
-            <span>垃圾桶</span>
-            <div>
-              <el-button type="danger" icon="Delete" @click="handleEmptyTrash">清空垃圾桶</el-button>
-              <el-button @click="showTrash = false">返回</el-button>
+      <template v-if="showTrash">
+        <el-card class="trash-card">
+          <template #header>
+            <div class="card-header">
+              <span>垃圾桶</span>
+              <div>
+                <el-button type="danger" icon="Delete" @click="handleEmptyTrash">清空垃圾桶</el-button>
+                <el-button @click="showTrash = false; selectedFolderId = null; fetchData()">返回</el-button>
+              </div>
             </div>
-          </div>
-        </template>
-        <el-table :data="trashList" stripe border>
-          <el-table-column prop="type" label="类型" width="100">
-            <template #default="{row}"><el-tag :type="row.type==='folder'?'warning':'info'" size="small">{{ row.type === 'folder' ? '文件夹' : '用例' }}</el-tag></template>
-          </el-table-column>
-          <el-table-column prop="name" label="名称" min-width="200" />
-          <el-table-column prop="deleted_at" label="删除时间" width="200" />
-          <el-table-column label="操作" width="100">
-            <template #default="{row}">
-              <el-button text type="primary" size="small" @click="handleRestoreItem(row)">恢复</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-card>
+          </template>
+          <el-table :data="trashList" stripe border>
+            <el-table-column prop="type" label="类型" width="100">
+              <template #default="{row}"><el-tag :type="row.type==='folder'?'warning':'info'" size="small">{{ row.type === 'folder' ? '文件夹' : '用例' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column prop="name" label="名称" min-width="200" />
+            <el-table-column prop="deleted_at" label="删除时间" width="200" />
+            <el-table-column label="操作" width="100">
+              <template #default="{row}">
+                <el-button text type="primary" size="small" @click="handleRestoreItem(row)">恢复</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </template>
 
-      <!-- Case List View -->
-      <el-card v-else>
-        <template #header>
-          <div class="card-header">
-            <span>{{ selectedFolderName }}</span>
+      <!-- Integrated Folder + Case View -->
+      <template v-else>
+        <!-- Left: Folder Tree with cases -->
+        <div class="folder-panel">
+          <div class="folder-header">
+            <span>用例目录</span>
+            <el-button text type="primary" icon="Plus" @click="handleCreateRootFolder" />
+          </div>
+          <div class="folder-tree-wrap">
+            <el-tree
+              ref="treeRef"
+              :data="folderTree"
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              default-expand-all
+              highlight-current
+              :expand-on-click-node="false"
+              draggable
+              :allow-drop="allowDrop"
+              @node-click="handleNodeClick"
+              @node-drop="handleNodeDrop"
+            >
+              <template #default="{ data }">
+                <div class="tree-node" :class="{ 'is-case': data.type === 'case' }">
+                  <el-icon v-if="data.type === 'case'" class="case-icon"><Document /></el-icon>
+                  <el-icon v-else><Folder /></el-icon>
+                  <span class="node-label">{{ data.name }}</span>
+                  <template v-if="data.type !== 'case'">
+                    <span class="node-count">{{ data.case_count }}</span>
+                    <el-dropdown trigger="click" @command="(cmd: string) => handleFolderCommand(cmd, data)" @click.stop>
+                      <el-icon class="node-more"><MoreFilled /></el-icon>
+                      <template #dropdown>
+                        <el-dropdown-menu>
+                          <el-dropdown-item command="addSub">新建子文件夹</el-dropdown-item>
+                          <el-dropdown-item command="rename">重命名</el-dropdown-item>
+                          <el-dropdown-item command="copy">复制</el-dropdown-item>
+                          <el-dropdown-item command="delete" divided>删除</el-dropdown-item>
+                        </el-dropdown-menu>
+                      </template>
+                    </el-dropdown>
+                  </template>
+                  <template v-else>
+                    <el-icon class="action-btn" title="复制用例" @click.stop="handleCopyCaseById(data.id)"><CopyDocument /></el-icon>
+                    <el-icon class="action-btn action-btn--delete" title="删除用例" @click.stop="handleDeleteCaseFromTree(data)"><Delete /></el-icon>
+                  </template>
+                </div>
+              </template>
+            </el-tree>
+          </div>
+          <div class="trash-node" :class="{ active: showTrash }" @click="handleTrashClick">
+            <el-icon><Delete /></el-icon>
+            <span>垃圾桶</span>
+            <span v-if="trashCount > 0" class="trash-count">{{ trashCount }}</span>
+          </div>
+        </div>
+
+        <!-- Right: Case Table -->
+        <div class="case-panel">
+          <div class="case-header">
+            <span class="case-title">{{ selectedFolderName }}</span>
             <div>
               <el-button type="warning" icon="CaretRight" :disabled="!selectedCases.length" @click="handleBatchExecute">批量执行({{ selectedCases.length }})</el-button>
               <el-button type="success" icon="VideoCamera" @click="showRecordDialog">用例录制</el-button>
               <el-button type="primary" icon="Plus" @click="handleCreate">新建用例</el-button>
             </div>
           </div>
-        </template>
-        <el-form :inline="true" class="filter-form">
-          <el-form-item label="类型"><el-select v-model="filters.type" style="width:140px" clearable placeholder="全部" @change="fetchData"><el-option label="API" value="API" /><el-option label="UI" value="UI" /><el-option label="性能" value="PERFORMANCE" /></el-select></el-form-item>
-          <el-form-item label="状态"><el-select v-model="filters.status" style="width:140px" clearable placeholder="全部" @change="fetchData"><el-option label="草稿" value="DRAFT" /><el-option label="激活" value="ACTIVE" /><el-option label="废弃" value="DEPRECATED" /></el-select></el-form-item>
-          <el-form-item label="优先级"><el-select v-model="filters.priority" style="width:140px" clearable placeholder="全部" @change="fetchData"><el-option label="BVT" value="BVT" /><el-option label="P0" value="P0" /><el-option label="P1" value="P1" /><el-option label="P2" value="P2" /><el-option label="P3" value="P3" /></el-select></el-form-item>
-          <el-form-item label="编写人"><el-select v-model="filters.author" style="width:140px" clearable placeholder="全部" @change="fetchData"><el-option v-for="a in authorList" :key="a" :label="a" :value="a" /></el-select></el-form-item>
-          <el-form-item label="搜索"><el-input v-model="filters.keyword" placeholder="用例名称/ID" clearable @clear="fetchData" /></el-form-item>
-          <el-form-item><el-button type="primary" @click="fetchData">查询</el-button></el-form-item>
-        </el-form>
-        <el-table :data="caseList" v-loading="loading" stripe border @selection-change="handleSelectionChange">
-          <el-table-column type="selection" width="50" />
-          <el-table-column prop="id" label="用例ID" width="280" show-overflow-tooltip />
-          <el-table-column prop="name" label="用例名称" min-width="200" show-overflow-tooltip />
-          <el-table-column prop="type" label="类型" width="100"><template #default="{row}"><el-tag size="small">{{ row.type }}</el-tag></template></el-table-column>
-          <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='BVT'?'danger':row.priority==='P0'?'danger':row.priority==='P1'?'warning':''" size="small">{{ row.priority }}</el-tag></template></el-table-column>
-          <el-table-column prop="author" label="编写人" width="100" show-overflow-tooltip />
-          <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='ACTIVE'?'success':row.status==='DEPRECATED'?'info':''" size="small">{{ row.status }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="240" fixed="right">
-            <template #default="{row}">
-              <el-button text type="success" size="small" @click="handleExecute(row)">执行</el-button>
-              <el-button text type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-              <el-button text type="primary" size="small" @click="handleCopyCase(row)">复制</el-button>
-              <el-popconfirm title="确认删除?" @confirm="handleDelete(row.id)"><template #reference><el-button text type="danger" size="small">删除</el-button></template></el-popconfirm>
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-pagination class="pagination" v-model:current-page="pagination.page" v-model:page-size="pagination.pageSize" :total="pagination.total" :page-sizes="[10,20,50]" layout="total, sizes, prev, pager, next" @size-change="fetchData" @current-change="fetchData" />
-      </el-card>
+          <el-table :data="caseList" v-loading="loading" stripe border @selection-change="handleSelectionChange" :row-class-name="caseRowClass" @row-click="handleCaseRowClick">
+            <el-table-column type="selection" width="50" />
+            <el-table-column prop="id" label="用例ID" width="280" show-overflow-tooltip />
+            <el-table-column prop="name" label="用例名称" min-width="200">
+              <template #default="{row}">
+                <div class="name-cell">
+                  <span class="name-text" :title="row.name">{{ row.name }}</span>
+                  <el-icon class="name-copy-btn" title="复制名称" @click.stop="copyCaseName(row.name)"><CopyDocument /></el-icon>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="type" label="类型" width="100"><template #default="{row}"><el-tag size="small">{{ row.type }}</el-tag></template></el-table-column>
+            <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='BVT'?'danger':row.priority==='P0'?'danger':row.priority==='P1'?'warning':''" size="small">{{ row.priority }}</el-tag></template></el-table-column>
+            <el-table-column prop="author" label="编写人" width="100" show-overflow-tooltip />
+            <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='ACTIVE'?'success':row.status==='DEPRECATED'?'info':''" size="small">{{ row.status }}</el-tag></template></el-table-column>
+            <el-table-column label="操作" width="200" fixed="right">
+              <template #default="{row}">
+                <el-button text type="success" size="small" @click.stop="handleExecute(row)">执行</el-button>
+                <el-button text type="primary" size="small" @click.stop="handleEdit(row)">编辑</el-button>
+                <el-popconfirm title="确认删除?" @confirm="handleDelete(row.id)"><template #reference><el-button text type="danger" size="small" @click.stop>删除</el-button></template></el-popconfirm>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination class="pagination" v-model:current-page="pagination.page" v-model:page-size="pagination.pageSize" :total="pagination.total" :page-sizes="[10,20,50]" layout="total, sizes, prev, pager, next" @size-change="fetchData" @current-change="fetchData" />
+        </div>
+      </template>
     </div>
 
     <!-- Create / Edit Dialog -->
@@ -116,6 +141,9 @@
         <el-tabs v-model="activeTab">
           <el-tab-pane label="基本信息" name="basic">
             <el-form-item label="用例ID" v-if="isEdit"><el-input :model-value="editingId" disabled /></el-form-item>
+            <el-form-item label="所属文件夹" prop="folder_id">
+              <el-tree-select v-model="form.folder_id" :data="folderOnlyTree" :props="{ label: 'name', children: 'children', value: 'id' }" placeholder="请选择文件夹" style="width:100%" check-strictly default-expand-all />
+            </el-form-item>
             <el-form-item label="用例名称" prop="name"><el-input v-model="form.name" placeholder="请输入用例名称" /></el-form-item>
             <el-form-item label="用例类型" prop="type"><el-select v-model="form.type" placeholder="请选择类型" @change="onTypeChange"><el-option label="API" value="API" /><el-option label="UI" value="UI" /><el-option label="性能测试" value="PERFORMANCE" /></el-select></el-form-item>
             <el-form-item label="优先级"><el-select v-model="form.priority"><el-option label="BVT" value="BVT" /><el-option label="P0" value="P0" /><el-option label="P1" value="P1" /><el-option label="P2" value="P2" /><el-option label="P3" value="P3" /></el-select></el-form-item>
@@ -187,7 +215,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue'
+import { ref, reactive, computed, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
@@ -204,12 +232,22 @@ const filters = reactive({ type: '', status: '', priority: '', author: '', keywo
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
 
 // Folder state
+const treeRef = ref<any>(null)
 const folderTree = ref<any[]>([])
 const selectedFolderId = ref<string | null>(null)
 const selectedFolderName = ref<string>('全部用例')
 const showTrash = ref(false)
 const trashList = ref<any[]>([])
 const trashCount = ref(0)
+const highlightedCaseId = ref<string | null>(null)
+
+// Folder-only tree for tree-select (strips case leaf nodes)
+function filterFolderOnly(nodes: any[]): any[] {
+  return nodes
+    .filter(n => n.type !== 'case')
+    .map(n => ({ ...n, children: n.children ? filterFolderOnly(n.children) : [] }))
+}
+const folderOnlyTree = computed(() => filterFolderOnly(folderTree.value))
 
 const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
 
@@ -228,6 +266,7 @@ const recordedScript = ref('')
 const recordBindCaseId = ref('')
 
 const defaultForm = () => ({
+  folder_id: selectedFolderId.value || '',
   name: '',
   type: 'API' as string,
   priority: 'P2',
@@ -253,6 +292,7 @@ const apiHeadersStr = computed({
 })
 
 const rules: FormRules = {
+  folder_id: [{ required: true, message: '请选择所属文件夹', trigger: 'change' }],
   name: [{ required: true, message: '请输入用例名称', trigger: 'blur' }],
   type: [{ required: true, message: '请选择用例类型', trigger: 'change' }],
 }
@@ -281,7 +321,7 @@ async function handleEdit(row: any) {
     const res = await getCaseDetail(row.id)
     const data = res.data
     Object.assign(form, {
-      name: data.name || '', type: data.type || 'API', priority: data.priority || 'P2',
+      folder_id: data.folder_id || '', name: data.name || '', type: data.type || 'API', priority: data.priority || 'P2',
       author: data.author || '', module: data.module || '', tags: data.tags || [],
       description: data.description || '', preconditions: data.preconditions || '',
       stepsText: (data.steps && data.steps.length) ? data.steps.map((s: any) => s.action || s).join('\n') : '',
@@ -305,7 +345,7 @@ async function handleSubmit() {
     const payload: any = {
       name: form.name, type: form.type, priority: form.priority,
       author: form.author || undefined, module: form.module || undefined,
-      folder_id: selectedFolderId.value || undefined,
+      folder_id: form.folder_id || undefined,
       tags: form.tags.length ? form.tags : undefined,
       description: form.description || undefined, preconditions: form.preconditions || undefined,
       steps: form.stepsText ? [{ action: form.stepsText }] : undefined,
@@ -331,6 +371,7 @@ async function handleSubmit() {
     }
     dialogVisible.value = false
     fetchData()
+    fetchFolderTree()
   } catch {} finally { submitting.value = false }
 }
 
@@ -373,8 +414,51 @@ async function handleBatchExecute() {
   } catch {}
 }
 
-async function handleCopyCase(row: any) {
-  try { await copyCase(row.id); ElMessage.success('复制成功'); fetchData(); fetchFolderTree() } catch {}
+async function handleCopyCaseById(id: string) {
+  try {
+    await copyCase(id)
+    ElMessage.success('用例已复制')
+    fetchData()
+    fetchFolderTree()
+  } catch {}
+}
+
+async function handleDeleteCaseFromTree(data: any) {
+  try {
+    await ElMessageBox.confirm(`确认删除用例"${data.name}"？`, '删除确认', { type: 'warning' })
+    await deleteCase(data.id)
+    ElMessage.success('删除成功')
+    fetchData()
+    fetchFolderTree()
+  } catch {}
+}
+
+// Drag and drop: only allow cases to be dropped onto folders
+function allowDrop(draggingNode: any, dropNode: any, type: string) {
+  if (draggingNode.data.type !== 'case') return false
+  if (dropNode.data.type === 'case') return false
+  return true
+}
+
+async function handleNodeDrop(draggingNode: any, dropNode: any) {
+  const caseId = draggingNode.data.id
+  const targetFolderId = dropNode.data.id
+  try {
+    await updateCase(caseId, { folder_id: targetFolderId })
+    ElMessage.success('移动成功')
+    fetchData()
+    fetchFolderTree()
+  } catch {
+    ElMessage.error('移动失败')
+  }
+}
+
+function copyCaseName(name: string) {
+  navigator.clipboard.writeText(name).then(() => {
+    ElMessage.success('已复制用例名称')
+  }).catch(() => {
+    ElMessage.error('复制失败')
+  })
 }
 
 // Folder functions
@@ -388,12 +472,28 @@ async function fetchFolderTree() {
   } catch {}
 }
 
-function handleFolderClick(data: any) {
+function handleNodeClick(data: any) {
+  if (data.type === 'case') {
+    // Clicked a case leaf node: highlight it in the table
+    highlightedCaseId.value = data.id
+    // Ensure the parent folder is selected so the table shows this case
+    return
+  }
+  // Clicked a folder: select it and filter the table
+  highlightedCaseId.value = null
   selectedFolderId.value = data.id
   selectedFolderName.value = data.name
   showTrash.value = false
   pagination.page = 1
   fetchData()
+}
+
+function handleCaseRowClick(row: any) {
+  highlightedCaseId.value = row.id
+}
+
+function caseRowClass({ row }: { row: any }) {
+  return row.id === highlightedCaseId.value ? 'highlighted-row' : ''
 }
 
 async function handleCreateRootFolder() {
@@ -455,6 +555,8 @@ function handleFolderCommand(cmd: string, data: any) {
 // Trash functions
 async function handleTrashClick() {
   showTrash.value = true
+  selectedFolderId.value = null
+  highlightedCaseId.value = null
   try { const res = await getTrashList(); trashList.value = res.data || [] } catch {}
 }
 
@@ -556,22 +658,42 @@ fetchFolderTree()
 </script>
 
 <style scoped>
-.case-list { display: flex; gap: 16px; height: calc(100vh - 120px); }
-.folder-sidebar { width: 240px; flex-shrink: 0; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
-.sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--el-border-color-lighter); }
-.sidebar-tree { flex: 1; overflow-y: auto; padding: 8px; }
+.case-list { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 120px); }
+.filter-bar { background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; padding: 12px 16px 0; }
+.filter-form { margin-bottom: 0; }
+.main-area { display: flex; gap: 12px; flex: 1; min-height: 0; }
+.folder-panel { width: 280px; flex-shrink: 0; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+.folder-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--el-border-color-lighter); }
+.folder-tree-wrap { flex: 1; overflow-y: auto; padding: 8px; }
+.case-panel { flex: 1; min-width: 0; background: var(--el-bg-color); border: 1px solid var(--el-border-color-lighter); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+.case-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; font-weight: 600; border-bottom: 1px solid var(--el-border-color-lighter); flex-shrink: 0; }
+.case-title { font-size: 15px; }
+.case-panel .el-table { flex: 1; }
+.case-panel :deep(.el-table__body-wrapper) { overflow-y: auto; }
 .tree-node { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.tree-node.is-case { padding-left: 4px; }
+.case-icon { color: var(--el-color-primary); font-size: 14px; }
 .node-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .node-count { font-size: 11px; color: var(--el-text-color-secondary); background: var(--el-fill-color-light); padding: 0 6px; border-radius: 10px; }
+.action-btn { opacity: 0; color: var(--el-text-color-secondary); cursor: pointer; font-size: 13px; margin-left: 4px; }
+.action-btn:hover { color: var(--el-color-primary); }
+.action-btn--delete:hover { color: var(--el-color-danger); }
+.tree-node:hover .action-btn { opacity: 1; }
+.name-cell { display: flex; align-items: center; gap: 6px; }
+.name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name-copy-btn { opacity: 0; color: var(--el-text-color-secondary); cursor: pointer; font-size: 14px; flex-shrink: 0; }
+.name-copy-btn:hover { color: var(--el-color-primary); }
+.name-cell:hover .name-copy-btn { opacity: 1; }
 .node-more { opacity: 0; margin-left: auto; }
 .tree-node:hover .node-more { opacity: 1; }
 .trash-node { display: flex; align-items: center; gap: 8px; padding: 10px 16px; cursor: pointer; border-top: 1px solid var(--el-border-color-lighter); color: var(--el-text-color-secondary); font-size: 13px; }
 .trash-node:hover, .trash-node.active { background: var(--el-fill-color-light); color: var(--el-text-color-primary); }
 .trash-count { font-size: 11px; background: var(--el-color-danger); color: #fff; padding: 0 6px; border-radius: 10px; }
-.case-content { flex: 1; min-width: 0; }
+.trash-card { flex: 1; min-width: 0; }
 .card-header { display: flex; align-items: center; justify-content: space-between; }
-.filter-form { margin-bottom: 16px; }
-.pagination { margin-top: 16px; display: flex; justify-content: flex-end; }
+.pagination { margin-top: 12px; display: flex; justify-content: flex-end; padding: 0 16px 12px; }
+:deep(.highlighted-row) { background-color: var(--el-color-primary-light-9) !important; }
+:deep(.highlighted-row:hover > td) { background-color: var(--el-color-primary-light-8) !important; }
 .record-panel { text-align: center; padding: 20px; }
 .record-start p, .record-active p, .record-done p { margin-bottom: 20px; color: var(--el-text-color-secondary); }
 .record-indicator { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 16px; font-size: 18px; color: var(--el-color-danger); }

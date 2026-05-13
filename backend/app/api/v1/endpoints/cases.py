@@ -28,20 +28,30 @@ router = APIRouter()
 
 
 # ── Helper: build folder tree ──────────────────────────────────────
-def _build_tree(folders: list, case_counts: dict, parent_id=None) -> list:
+def _build_tree(folders: list, case_counts: dict, cases_by_folder: dict, parent_id=None) -> list:
     tree = []
     for f in folders:
         if f.parent_id == parent_id:
-            children = _build_tree(folders, case_counts, f.id)
+            children = _build_tree(folders, case_counts, cases_by_folder, f.id)
+            # Add cases as leaf nodes under this folder
+            for c in cases_by_folder.get(f.id, []):
+                children.append({
+                    "id": str(c.id),
+                    "name": c.name,
+                    "type": "case",
+                    "priority": c.priority,
+                    "status": c.status,
+                })
             tree.append({
                 "id": str(f.id),
                 "name": f.name,
+                "type": "folder",
                 "parent_id": str(f.parent_id) if f.parent_id else None,
                 "sort_order": f.sort_order,
                 "case_count": case_counts.get(f.id, 0),
                 "children": children,
             })
-    tree.sort(key=lambda x: x["sort_order"])
+    tree.sort(key=lambda x: x.get("sort_order", 0))
     return tree
 
 
@@ -61,7 +71,15 @@ async def get_folder_tree(db: AsyncSession = Depends(get_db), current_user: User
     )).all()
     case_counts = {row[0]: row[1] for row in count_result}
 
-    tree = _build_tree(folders, case_counts)
+    # Fetch all active cases grouped by folder
+    all_cases = (await db.execute(
+        select(TestCase).where(TestCase.deleted_at.is_(None), TestCase.folder_id.isnot(None))
+    )).scalars().all()
+    cases_by_folder: dict = {}
+    for c in all_cases:
+        cases_by_folder.setdefault(c.folder_id, []).append(c)
+
+    tree = _build_tree(folders, case_counts, cases_by_folder)
     return ResponseModel(data=tree)
 
 
@@ -150,7 +168,7 @@ async def copy_folder(folder_id: str, db: AsyncSession = Depends(get_db), curren
     # Recursive copy
     async def _copy_folder(src_folder, dest_parent_id):
         new_folder = CaseFolder(
-            name=f"{src_folder.name} (副本)",
+            name=f"{src_folder.name}-复制",
             parent_id=dest_parent_id,
             sort_order=src_folder.sort_order,
             creator_id=current_user.id,
@@ -267,7 +285,7 @@ async def copy_case(case_id: str, db: AsyncSession = Depends(get_db), current_us
         raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
 
     data = {c.name: getattr(src, c.name) for c in src.__table__.columns if c.name not in ("id", "created_at", "updated_at")}
-    data["name"] = f"{src.name} (副本)"
+    data["name"] = f"{src.name}-复制"
     data["creator_id"] = current_user.id
     data["version"] = 1
     new_case = TestCase(**data)
