@@ -33,12 +33,21 @@ export function exportCases(params: any) {
   return request.get('/cases/export', { params, responseType: 'blob' })
 }
 
-export function executeCases(caseIds: string[]) {
-  return request.post('/cases/execute', { case_ids: caseIds })
+export function executeCases(caseIds: string[], name?: string) {
+  return request.post('/cases/execute', { case_ids: caseIds, name })
 }
 
 export function copyCase(id: string) {
   return request.post(`/cases/${id}/copy`)
+}
+
+// Recording
+export function startRecording(url: string) {
+  return request.post('/cases/record/start', { url })
+}
+
+export function stopRecording(sessionId: string) {
+  return request.post('/cases/record/stop', { session_id: sessionId })
 }
 
 // Folder CRUD

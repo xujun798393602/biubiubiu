@@ -186,29 +186,47 @@
     </el-dialog>
 
     <!-- Record Dialog -->
-    <el-dialog v-model="recordDialogVisible" title="用例录制" width="600px" draggable destroy-on-close>
-      <div class="record-panel">
-        <div v-if="!recording && !recordedScript" class="record-start">
-          <p>点击开始录制，将捕获浏览器操作并生成自动化脚本。</p>
-          <el-button type="danger" size="large" icon="VideoCamera" @click="startRecording">开始录制</el-button>
-        </div>
-        <div v-if="recording" class="record-active">
-          <div class="record-indicator"><span class="record-dot"></span><span>录制中...</span></div>
-          <p>正在捕获浏览器操作，请在目标页面上执行操作。</p>
-          <el-button type="info" size="large" icon="VideoPause" @click="stopRecording">停止录制</el-button>
-        </div>
-        <div v-if="recordedScript && !recording" class="record-done">
-          <el-form-item label="绑定用例">
-            <el-select v-model="recordBindCaseId" placeholder="选择要绑定的用例" filterable style="width:100%">
-              <el-option v-for="c in caseList" :key="c.id" :label="`${c.name} (${c.id.slice(0,8)}...)`" :value="c.id" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="录制脚本"><el-input v-model="recordedScript" type="textarea" :rows="10" readonly /></el-form-item>
+    <el-dialog v-model="recordDialogVisible" title="用例录制" width="90vw" top="5vh" draggable @close="handleRecordClose">
+      <div class="record-toolbar">
+        <el-input v-model="recordTargetUrl" placeholder="输入目标地址，如 http://example.com" clearable
+          :disabled="recordStatus !== 'idle'" style="flex:1" @keyup.enter="handleRecordStart" />
+        <el-button v-if="recordStatus === 'idle'" type="danger" icon="VideoCamera" @click="handleRecordStart">开始录制</el-button>
+        <el-button v-if="recordStatus === 'recording'" type="info" icon="VideoPause" @click="handleRecordStop">停止录制</el-button>
+        <el-button v-if="recordStatus === 'stopped'" type="danger" icon="VideoCamera" @click="handleRecordStart">重新录制</el-button>
+        <span v-if="recordStatus === 'recording'" class="record-indicator">
+          <span class="record-dot"></span>录制中 {{ recordFrameCount }} 帧
+        </span>
+      </div>
+      <div class="record-viewport">
+        <canvas ref="recordCanvasRef" class="record-canvas"
+          :style="{ cursor: recordStatus === 'recording' ? 'crosshair' : 'default' }" />
+        <div v-if="recordStatus === 'idle'" class="record-placeholder">
+          <el-icon :size="48"><VideoCamera /></el-icon>
+          <p>输入目标地址并点击"开始录制"</p>
         </div>
       </div>
+      <div class="record-footer">
+        <el-select v-model="recordBindCaseId" placeholder="选择要绑定的用例" filterable style="flex:1">
+          <el-option v-for="c in caseList" :key="c.id" :label="`${c.name} (${c.id.slice(0,8)}...)`" :value="c.id" />
+        </el-select>
+        <el-button type="primary" :disabled="!recordBindCaseId || !recordedScript.trim()" @click="bindRecordedScript">绑定到用例</el-button>
+      </div>
+      <el-input v-if="recordedScript" v-model="recordedScript" type="textarea" :rows="6" placeholder="录制脚本预览" readonly style="margin-top:12px" />
+    </el-dialog>
+
+    <!-- Batch Execute Dialog -->
+    <el-dialog v-model="batchDialogVisible" title="批量执行" width="480px" draggable destroy-on-close>
+      <el-form label-width="80px">
+        <el-form-item label="任务名称" required>
+          <el-input v-model="batchTaskName" placeholder="请输入任务名称" maxlength="128" show-word-limit />
+        </el-form-item>
+        <el-form-item label="用例数量">
+          <el-tag>{{ selectedCases.length }} 个用例</el-tag>
+        </el-form-item>
+      </el-form>
       <template #footer>
-        <el-button @click="recordDialogVisible = false">取消</el-button>
-        <el-button v-if="recordedScript && !recording" type="primary" :disabled="!recordBindCaseId" @click="bindRecordedScript">绑定到用例</el-button>
+        <el-button @click="batchDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="batchSubmitting" @click="handleBatchSubmit">确认执行</el-button>
       </template>
     </el-dialog>
   </div>
@@ -222,6 +240,7 @@ import {
   getCaseList, createCase, updateCase, getCaseDetail, deleteCase, getCaseAuthors, executeCases, copyCase,
   getFolderTree, createFolder, updateFolder, deleteFolder, copyFolder,
   getTrashList, emptyTrash, restoreTrashItem,
+  startRecording, stopRecording,
 } from '@/api/cases'
 
 const loading = ref(false)
@@ -261,9 +280,16 @@ const activeTab = ref('basic')
 
 // Record dialog state
 const recordDialogVisible = ref(false)
-const recording = ref(false)
+const recordTargetUrl = ref('')
 const recordedScript = ref('')
 const recordBindCaseId = ref('')
+const recordStatus = ref<'idle' | 'recording' | 'stopped'>('idle')
+const recordFrameCount = ref(0)
+const recordCanvasRef = ref<HTMLCanvasElement | null>(null)
+let recordWs: WebSocket | null = null
+let recordSessionId = ''
+let recordImg: HTMLImageElement | null = null
+let recordEventCleanups: (() => void)[] = []
 
 const defaultForm = () => ({
   folder_id: selectedFolderId.value || '',
@@ -323,13 +349,15 @@ async function handleEdit(row: any) {
     Object.assign(form, {
       folder_id: data.folder_id || '', name: data.name || '', type: data.type || 'API', priority: data.priority || 'P2',
       author: data.author || '', module: data.module || '', tags: data.tags || [],
-      description: data.description || '', preconditions: data.preconditions || '',
+      description: (data.description || '').replace(/^'|'$/g, ''),
+      preconditions: (data.preconditions || '').replace(/^'|'$/g, ''),
       stepsText: (data.steps && data.steps.length) ? data.steps.map((s: any) => s.action || s).join('\n') : '',
-      postconditions: data.postconditions || '', expected_result: data.expected_result || '',
+      postconditions: (data.postconditions || '').replace(/^'|'$/g, ''),
+      expected_result: (data.expected_result || '').replace(/^'|'$/g, ''),
       api_url: data.api_url || '', api_method: data.api_method || 'GET',
       api_headers: data.api_headers || null, api_body_type: data.api_body_type || 'JSON',
-      api_body: data.api_body || '', api_timeout: data.api_timeout || 30000,
-      ui_url: data.ui_url || '', ui_script: data.ui_script || '', ui_script_type: data.ui_script_type || 'MANUAL',
+      api_body: (data.api_body || '').replace(/^'|'$/g, ''), api_timeout: data.api_timeout || 30000,
+      ui_url: data.ui_url || '', ui_script: (data.ui_script || '').replace(/^'|'$/g, ''), ui_script_type: data.ui_script_type || 'MANUAL',
       perf_url: data.perf_url || '', perf_vusers: data.perf_vusers || 10,
       perf_spawn_rate: data.perf_spawn_rate || 1, perf_duration: data.perf_duration || 60,
     })
@@ -397,21 +425,42 @@ async function handleDelete(id: string) {
 // Execution
 function handleSelectionChange(selection: any[]) { selectedCases.value = selection }
 
+function formatNow() {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 async function handleExecute(row: any) {
   try {
-    await ElMessageBox.confirm(`确认执行用例"${row.name}"？`, '执行确认', { type: 'info' })
-    await executeCases([row.id])
+    const taskName = `${formatNow()}-${row.name}`
+    await executeCases([row.id], taskName)
     ElMessage.success('执行任务已创建')
   } catch {}
 }
 
-async function handleBatchExecute() {
+// Batch execute dialog state
+const batchDialogVisible = ref(false)
+const batchTaskName = ref('')
+const batchSubmitting = ref(false)
+
+function handleBatchExecute() {
   if (!selectedCases.value.length) return
+  batchTaskName.value = ''
+  batchDialogVisible.value = true
+}
+
+async function handleBatchSubmit() {
+  if (!batchTaskName.value.trim()) {
+    ElMessage.warning('请输入任务名称')
+    return
+  }
+  batchSubmitting.value = true
   try {
-    await ElMessageBox.confirm(`确认执行选中的 ${selectedCases.value.length} 个用例？`, '批量执行确认', { type: 'info' })
-    await executeCases(selectedCases.value.map(c => c.id))
+    await executeCases(selectedCases.value.map(c => c.id), batchTaskName.value.trim())
     ElMessage.success('批量执行任务已创建')
-  } catch {}
+    batchDialogVisible.value = false
+  } catch {} finally { batchSubmitting.value = false }
 }
 
 async function handleCopyCaseById(id: string) {
@@ -588,75 +637,153 @@ async function handleEmptyTrash() {
   } catch {}
 }
 
-// Recording functions
-const recordSteps = ref<Array<{ action: string; selector: string; value?: string }>>([])
-
 function showRecordDialog() {
-  recordedScript.value = ''; recordBindCaseId.value = ''; recording.value = false; recordSteps.value = []
+  recordTargetUrl.value = ''
+  recordedScript.value = ''
+  recordBindCaseId.value = ''
+  recordStatus.value = 'idle'
+  recordFrameCount.value = 0
+  recordSessionId = ''
   recordDialogVisible.value = true
 }
 
-function getSelector(el: HTMLElement): string {
-  if (el.id) return `#${el.id}`
-  const name = (el as HTMLInputElement).name
-  if (name) return `[name="${name}"]`
-  const path: string[] = []
-  let current: HTMLElement | null = el
-  while (current && current !== document.body) {
-    let selector = current.tagName.toLowerCase()
-    if (current.className && typeof current.className === 'string') {
-      const cls = current.className.trim().split(/\s+/).slice(0, 2).join('.')
-      if (cls) selector += `.${cls}`
-    }
-    path.unshift(selector); current = current.parentElement
+function mapRecordCoords(canvas: HTMLCanvasElement, clientX: number, clientY: number) {
+  const rect = canvas.getBoundingClientRect()
+  return {
+    x: Math.round((clientX - rect.left) * (1280 / rect.width)),
+    y: Math.round((clientY - rect.top) * (720 / rect.height)),
   }
-  return path.join(' > ')
 }
 
-function onRecordClick(e: MouseEvent) {
-  if (!recording.value) return
-  const target = e.target as HTMLElement
-  if (target.closest('.record-panel') || target.closest('.el-dialog')) return
-  recordSteps.value.push({ action: 'click', selector: getSelector(target) })
+function sendRecordEvent(event: any) {
+  if (recordWs && recordWs.readyState === WebSocket.OPEN) {
+    recordWs.send(JSON.stringify(event))
+  }
 }
-function onRecordInput(e: Event) {
-  if (!recording.value) return
-  const target = e.target as HTMLInputElement | HTMLTextAreaElement
-  if (target.closest('.record-panel') || target.closest('.el-dialog')) return
-  recordSteps.value.push({ action: 'fill', selector: getSelector(target), value: target.value })
-}
-function onRecordKeydown(e: KeyboardEvent) {
-  if (!recording.value || e.key !== 'Enter') return
-  const target = e.target as HTMLElement
-  if (target.closest('.record-panel') || target.closest('.el-dialog')) return
-  recordSteps.value.push({ action: 'press', selector: getSelector(target), value: 'Enter' })
-}
-function startRecording() {
-  recording.value = true; recordSteps.value = []
-  document.addEventListener('click', onRecordClick, true)
-  document.addEventListener('input', onRecordInput, true)
-  document.addEventListener('keydown', onRecordKeydown, true)
-  ElMessage.info('录制已开始，请在页面上操作')
-}
-function stopRecording() {
-  recording.value = false
-  document.removeEventListener('click', onRecordClick, true)
-  document.removeEventListener('input', onRecordInput, true)
-  document.removeEventListener('keydown', onRecordKeydown, true)
-  const lines = recordSteps.value.map(step => {
-    if (step.action === 'click') return `  await page.locator('${step.selector}').click()`
-    if (step.action === 'fill') return `  await page.locator('${step.selector}').fill('${step.value}')`
-    if (step.action === 'press') return `  await page.locator('${step.selector}').press('${step.value}')`
-    return ''
+
+function bindRecordCanvasEvents(canvas: HTMLCanvasElement) {
+  const onClick = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording') return
+    const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+    sendRecordEvent({ type: 'click', x, y })
+  }
+  const onDblClick = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording') return
+    const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+    sendRecordEvent({ type: 'dblclick', x, y })
+  }
+  const onWheel = (e: WheelEvent) => {
+    if (recordStatus.value !== 'recording') return
+    e.preventDefault()
+    sendRecordEvent({ type: 'scroll', deltaX: e.deltaX, deltaY: e.deltaY })
+  }
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (recordStatus.value !== 'recording') return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      sendRecordEvent({ type: 'type', text: e.key })
+    } else {
+      sendRecordEvent({ type: 'keypress', key: e.key })
+    }
+  }
+  canvas.addEventListener('click', onClick)
+  canvas.addEventListener('dblclick', onDblClick)
+  canvas.addEventListener('wheel', onWheel, { passive: false })
+  document.addEventListener('keydown', onKeyDown, true)
+  recordEventCleanups.push(() => {
+    canvas.removeEventListener('click', onClick)
+    canvas.removeEventListener('dblclick', onDblClick)
+    canvas.removeEventListener('wheel', onWheel)
+    document.removeEventListener('keydown', onKeyDown, true)
   })
-  recordedScript.value = `import { test, expect } from '@playwright/test'\n\ntest('recorded test', async ({ page }) => {\n  await page.goto('http://localhost')\n${lines.join('\n')}\n})`
-  ElMessage.success(`录制完成，共 ${recordSteps.value.length} 个步骤`)
 }
+
+async function handleRecordStart() {
+  if (!recordTargetUrl.value.trim()) {
+    ElMessage.warning('请输入目标地址')
+    return
+  }
+  recordStatus.value = 'recording'
+  recordFrameCount.value = 0
+  try {
+    const res = await startRecording(recordTargetUrl.value.trim())
+    recordSessionId = res.data.session_id
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const wsUrl = `${wsProtocol}//${location.host}${res.data.ws_url}`
+    await new Promise<void>((resolve, reject) => {
+      recordWs = new WebSocket(wsUrl)
+      recordWs.binaryType = 'arraybuffer'
+      recordWs.onopen = () => resolve()
+      recordWs.onerror = () => reject(new Error('连接失败'))
+      recordWs.onmessage = (event: MessageEvent) => {
+        const canvas = recordCanvasRef.value
+        if (!canvas) return
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const blob = new Blob([event.data], { type: 'image/jpeg' })
+        const url = URL.createObjectURL(blob)
+        if (!recordImg) recordImg = new Image()
+        recordImg.onload = () => {
+          canvas.width = recordImg!.width
+          canvas.height = recordImg!.height
+          ctx!.drawImage(recordImg!, 0, 0)
+          URL.revokeObjectURL(url)
+          recordFrameCount.value++
+        }
+        recordImg.src = url
+      }
+      recordWs.onclose = () => {
+        if (recordStatus.value === 'recording') recordStatus.value = 'stopped'
+      }
+    })
+    await nextTick()
+    if (recordCanvasRef.value) {
+      bindRecordCanvasEvents(recordCanvasRef.value)
+    }
+    ElMessage.success('录制已开始，请在下方浏览器画面中操作')
+  } catch (e: any) {
+    ElMessage.error('启动录制失败: ' + (e.message || ''))
+    recordStatus.value = 'idle'
+  }
+}
+
+async function handleRecordStop() {
+  if (!recordSessionId) return
+  try {
+    if (recordWs) { recordWs.send(JSON.stringify({ type: 'stop' })); recordWs.close(); recordWs = null }
+    recordEventCleanups.forEach(fn => fn())
+    recordEventCleanups = []
+    const res = await stopRecording(recordSessionId)
+    recordedScript.value = res.data.script || ''
+    recordStatus.value = 'stopped'
+    recordSessionId = ''
+    ElMessage.success('录制完成')
+  } catch { ElMessage.error('停止录制失败') }
+}
+
+function handleRecordClose() {
+  if (recordStatus.value === 'recording' && recordSessionId) {
+    if (recordWs) { recordWs.send(JSON.stringify({ type: 'stop' })); recordWs.close(); recordWs = null }
+    recordEventCleanups.forEach(fn => fn())
+    recordEventCleanups = []
+    stopRecording(recordSessionId).catch(() => {})
+  }
+  if (recordWs) { recordWs.close(); recordWs = null }
+  recordEventCleanups.forEach(fn => fn())
+  recordEventCleanups = []
+  recordImg = null
+  recordStatus.value = 'idle'
+  recordSessionId = ''
+}
+
 async function bindRecordedScript() {
   if (!recordBindCaseId.value || !recordedScript.value) return
   try {
     await updateCase(recordBindCaseId.value, { ui_script: recordedScript.value, ui_script_type: 'PLAYWRIGHT' })
-    ElMessage.success('脚本已绑定到用例'); recordDialogVisible.value = false; fetchData()
+    ElMessage.success('脚本已绑定到用例')
+    recordDialogVisible.value = false
+    fetchData()
   } catch { ElMessage.error('绑定失败') }
 }
 
@@ -702,9 +829,13 @@ fetchFolderTree()
 .pagination { margin-top: 12px; display: flex; justify-content: flex-end; padding: 0 16px 12px; }
 :deep(.highlighted-row) { background-color: var(--el-color-primary-light-9) !important; }
 :deep(.highlighted-row:hover > td) { background-color: var(--el-color-primary-light-8) !important; }
-.record-panel { text-align: center; padding: 20px; }
-.record-start p, .record-active p, .record-done p { margin-bottom: 20px; color: var(--el-text-color-secondary); }
-.record-indicator { display: flex; align-items: center; justify-content: center; gap: 8px; margin-bottom: 16px; font-size: 18px; color: var(--el-color-danger); }
-.record-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--el-color-danger); animation: pulse 1s infinite; }
+.record-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.record-viewport { width: 100%; height: 60vh; background: #1a1a2e; border-radius: 8px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; }
+.record-canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
+.record-placeholder { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--el-text-color-secondary); }
+.record-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+.record-indicator { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--el-color-danger); font-weight: 600; }
+.record-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--el-color-danger); animation: pulse 1s infinite; }
+.frame-counter { font-size: 12px; color: var(--el-text-color-secondary); font-weight: 400; }
 @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
 </style>

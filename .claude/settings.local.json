@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(python *)",
-      "Bash(PYTHONIOENCODING=utf-8 python *)"
+      "Bash(PYTHONIOENCODING=utf-8 python *)",
+      "Bash(ssh *)",
+      "Bash(ping -n 2 192.168.3.200)",
+      "Bash(scoop install *)",
+      "Bash(choco install *)",
+      "Bash(pip install *)"
     ]
   }
 }

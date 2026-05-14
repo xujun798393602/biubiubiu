@@ -37,3 +37,6 @@ openpyxl==3.1.5
 
 # WebSocket
 websockets==13.0
+
+# Browser automation (recording)
+playwright==1.48.0

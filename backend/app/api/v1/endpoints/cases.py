@@ -1,12 +1,13 @@
 """Test case management endpoints."""
 
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List
+from typing import List, Optional
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_roles
@@ -18,10 +19,12 @@ from app.schemas.case import (
     FolderCreate, FolderUpdate, FolderItem, FolderTreeItem,
 )
 from app.schemas.common import ResponseModel
+from app.services.recording_manager import recording_manager
 
 
 class CaseExecuteRequest(BaseModel):
     case_ids: List[str] = Field(..., min_length=1, max_length=100)
+    name: Optional[str] = None
 
 
 router = APIRouter()
@@ -407,8 +410,9 @@ async def execute_cases(
         raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "部分用例不存在"})
 
     # Create task
+    task_name = body.name if body.name else f"快速执行 {len(body.case_ids)} 个用例"
     task = Task(
-        name=f"快速执行 {len(body.case_ids)} 个用例",
+        name=task_name,
         description="从用例管理页面快速执行",
         priority="MEDIUM",
         execute_type="IMMEDIATE",
@@ -435,3 +439,43 @@ async def delete_case(case_id: str, db: AsyncSession = Depends(get_db), current_
     case.deleted_at = datetime.now(timezone.utc)
     await db.commit()
     return ResponseModel(message="删除成功")
+
+
+# ── Recording endpoints ────────────────────────────────────────────
+
+
+class RecordStartRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+
+
+class RecordStopRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+
+
+@router.post("/record/start", response_model=ResponseModel, status_code=201)
+async def start_recording(
+    body: RecordStartRequest,
+    current_user: User = Depends(get_current_user),
+):
+    url = body.url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "http://" + url
+
+    session_id = str(uuid.uuid4())
+    try:
+        await recording_manager.create_session(session_id, url)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"code": "RECORD_START_FAILED", "message": f"启动录制失败: {e}"})
+    ws_url = f"/api/v1/ws/record/{session_id}"
+    return ResponseModel(data={"session_id": session_id, "ws_url": ws_url})
+
+
+@router.post("/record/stop", response_model=ResponseModel)
+async def stop_recording(
+    body: RecordStopRequest,
+    current_user: User = Depends(get_current_user),
+):
+    script = await recording_manager.remove_session(body.session_id)
+    if script is None:
+        raise HTTPException(status_code=404, detail={"code": "SESSION_NOT_FOUND", "message": "录制会话不存在"})
+    return ResponseModel(data={"script": script})

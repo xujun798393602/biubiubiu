@@ -29,16 +29,16 @@ class TestCase(BaseModel):
     __tablename__ = "test_cases"
 
     name: Mapped[str] = mapped_column(String(256), nullable=False, comment="用例名称")
-    description: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="用例描述")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="用例描述")
     type: Mapped[CaseType] = mapped_column(String(16), nullable=False, comment="用例类型")
     status: Mapped[CaseStatus] = mapped_column(String(16), nullable=False, default=CaseStatus.DRAFT, comment="用例状态")
     priority: Mapped[Priority] = mapped_column(String(4), nullable=False, default=Priority.P2, comment="优先级")
     module: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="所属模块")
     tags: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="标签列表")
-    preconditions: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="前置条件")
+    preconditions: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="前置条件")
     steps: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), comment="执行步骤列表")
-    postconditions: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="后置条件")
-    expected_result: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="预期结果")
+    postconditions: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="后置条件")
+    expected_result: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="预期结果")
     author: Mapped[str | None] = mapped_column(String(128), nullable=True, comment="用例编写人")
     assertions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), comment="断言规则列表")
     creator_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, comment="创建人")
@@ -49,14 +49,14 @@ class TestCase(BaseModel):
     api_method: Mapped[HttpMethod | None] = mapped_column(String(10), nullable=True, comment="请求方法")
     api_headers: Mapped[dict | None] = mapped_column(JSONB, nullable=True, server_default=text("'{}'::jsonb"), comment="请求头")
     api_body_type: Mapped[BodyType | None] = mapped_column(String(16), nullable=True, comment="请求体类型")
-    api_body: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="请求体内容")
+    api_body: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="请求体内容")
     api_timeout: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="接口超时时间(ms)")
     api_assertions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), comment="断言规则列表")
     api_dependencies: Mapped[list | None] = mapped_column(JSONB, nullable=True, server_default=text("'[]'::jsonb"), comment="接口依赖配置")
 
     # UI test fields
     ui_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="页面 URL")
-    ui_script: Mapped[str | None] = mapped_column(Text, nullable=True, server_default="''", comment="UI 自动化脚本")
+    ui_script: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="UI 自动化脚本")
     ui_script_type: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="脚本类型: MANUAL/PLAYWRIGHT/SELENIUM")
     ui_steps: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="UI 操作步骤")
 

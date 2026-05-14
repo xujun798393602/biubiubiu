@@ -39,6 +39,16 @@ async def seed_default_admin():
         await session.commit()
 
 
+async def cleanup_empty_text_fields():
+    """Fix records that have literal '' stored as text instead of empty string."""
+    async with get_session_factory()() as session:
+        for col in ("description", "preconditions", "postconditions", "expected_result", "api_body", "ui_script"):
+            await session.execute(
+                update(TestCase).where(getattr(TestCase, col) == "''").values({col: ""})
+            )
+        await session.commit()
+
+
 async def ensure_default_folder():
     """Create default folder and assign unmapped cases to it."""
     async with get_session_factory()() as session:
@@ -73,8 +83,11 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     await seed_default_admin()
     await ensure_default_folder()
+    await cleanup_empty_text_fields()
     yield
     # Shutdown
+    from app.services.recording_manager import recording_manager
+    await recording_manager.shutdown()
     await eng.dispose()
 
 
@@ -96,9 +109,12 @@ app.add_middleware(
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    print(f"[ERROR] {request.method} {request.url.path}: {type(exc).__name__}: {exc}")
+    traceback.print_exc()
     return JSONResponse(
         status_code=500,
-        content={"code": -1, "message": "服务器内部错误", "error_code": "INTERNAL_ERROR"},
+        content={"code": -1, "message": f"服务器内部错误: {type(exc).__name__}: {exc}", "error_code": "INTERNAL_ERROR"},
     )
 
 
@@ -113,7 +129,7 @@ async def readiness_check():
 
 
 # Register routers
-from app.api.v1.endpoints import auth, cases, tasks, results, nodes, system
+from app.api.v1.endpoints import auth, cases, tasks, results, nodes, system, record_ws
 
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX + "/auth", tags=["认证"])
 app.include_router(cases.router, prefix=settings.API_V1_PREFIX + "/cases", tags=["用例管理"])
@@ -121,3 +137,4 @@ app.include_router(tasks.router, prefix=settings.API_V1_PREFIX + "/tasks", tags=
 app.include_router(results.router, prefix=settings.API_V1_PREFIX + "/results", tags=["测试结果"])
 app.include_router(nodes.router, prefix=settings.API_V1_PREFIX + "/nodes", tags=["节点管理"])
 app.include_router(system.router, prefix=settings.API_V1_PREFIX + "/system", tags=["系统管理"])
+app.include_router(record_ws.router, prefix=settings.API_V1_PREFIX, tags=["录制"])
