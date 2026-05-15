@@ -475,7 +475,7 @@ async def stop_recording(
     body: RecordStopRequest,
     current_user: User = Depends(get_current_user),
 ):
-    script = await recording_manager.remove_session(body.session_id)
-    if script is None:
+    result = await recording_manager.remove_session(body.session_id)
+    if result is None:
         raise HTTPException(status_code=404, detail={"code": "SESSION_NOT_FOUND", "message": "录制会话不存在"})
-    return ResponseModel(data={"script": script})
+    return ResponseModel(data={"script": result["script"], "url": result["url"]})

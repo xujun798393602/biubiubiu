@@ -121,6 +121,20 @@ class RecordingSession:
                 self.actions.append(
                     {"type": "dblclick", "x": x, "y": y, "selector": selector}
                 )
+            elif event_type == "mousedown":
+                x, y = event["x"], event["y"]
+                await self.page.mouse.move(x, y)
+                await self.page.mouse.down()
+                self.actions.append({"type": "mousedown", "x": x, "y": y})
+            elif event_type == "mousemove":
+                x, y = event["x"], event["y"]
+                await self.page.mouse.move(x, y)
+                self.actions.append({"type": "mousemove", "x": x, "y": y})
+            elif event_type == "mouseup":
+                x, y = event["x"], event["y"]
+                await self.page.mouse.move(x, y)
+                await self.page.mouse.up()
+                self.actions.append({"type": "mouseup", "x": x, "y": y})
             elif event_type == "type":
                 text = event["text"]
                 await self.page.keyboard.type(text)
@@ -170,6 +184,14 @@ class RecordingSession:
                     lines.append(
                         f'    page.mouse.dblclick({action["x"]}, {action["y"]})'
                     )
+            elif atype == "mousedown":
+                lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+                lines.append('    page.mouse.down()')
+            elif atype == "mousemove":
+                lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+            elif atype == "mouseup":
+                lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+                lines.append('    page.mouse.up()')
             elif atype == "type":
                 text = action["text"].replace('"', '\\"')
                 lines.append(f'    page.keyboard.type("{text}")')
@@ -236,12 +258,13 @@ class RecordingManager:
     def get_session(self, session_id: str) -> RecordingSession | None:
         return self._sessions.get(session_id)
 
-    async def remove_session(self, session_id: str) -> str | None:
+    async def remove_session(self, session_id: str) -> dict | None:
         session = self._sessions.pop(session_id, None)
         if session:
             script = session.generate_script()
+            url = session.url
             await session.cleanup()
-            return script
+            return {"script": script, "url": url}
         return None
 
     async def shutdown(self):

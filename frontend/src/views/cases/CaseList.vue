@@ -104,6 +104,7 @@
             <div>
               <el-button type="warning" icon="CaretRight" :disabled="!selectedCases.length" @click="handleBatchExecute">批量执行({{ selectedCases.length }})</el-button>
               <el-button type="success" icon="VideoCamera" @click="showRecordDialog">用例录制</el-button>
+              <el-button type="info" icon="VideoPlay" :disabled="!selectedCases.length || !hasRecordedScript" @click="showReplayDialog">用例回放</el-button>
               <el-button type="primary" icon="Plus" @click="handleCreate">新建用例</el-button>
             </div>
           </div>
@@ -229,6 +230,68 @@
         <el-button type="primary" :loading="batchSubmitting" @click="handleBatchSubmit">确认执行</el-button>
       </template>
     </el-dialog>
+
+    <!-- Replay Dialog -->
+    <el-dialog v-model="replayDialogVisible" title="用例回放" width="90vw" top="5vh" draggable @close="handleReplayClose">
+      <div class="replay-header">
+        <el-select v-model="replayCaseId" placeholder="选择要回放的用例" filterable @change="loadReplayScript" style="flex:1">
+          <el-option v-for="c in recordedCases" :key="c.id" :label="`${c.name} (${c.id.slice(0,8)}...)`" :value="c.id" />
+        </el-select>
+        <el-button
+          :type="replayStatus === 'idle' || replayStatus === 'finished' ? 'primary' : replayStatus === 'playing' ? 'success' : 'danger'"
+          :icon="replayStatus === 'idle' || replayStatus === 'finished' ? 'VideoPlay' : replayStatus === 'playing' ? 'VideoPause' : 'VideoPlay'"
+          :disabled="!replayScript"
+          @click="handleReplayAction"
+        >
+          {{ replayStatus === 'idle' || replayStatus === 'finished' ? '开始回放' : replayStatus === 'playing' ? '回放中' : '已暂停' }}
+        </el-button>
+        <el-button type="danger" icon="Close" :disabled="replayStatus === 'idle' || replayStatus === 'finished'" @click="stopReplay">结束回放</el-button>
+      </div>
+      <div class="replay-viewport">
+        <div v-if="!replayScript" class="replay-placeholder">
+          <el-icon :size="48"><VideoPlay /></el-icon>
+          <p>选择用例并点击"开始回放"查看录制结果</p>
+        </div>
+        <div v-if="replayScript && replayStatus !== 'idle'" class="replay-content">
+          <div class="replay-steps">
+            <div class="replay-steps-header">回放步骤</div>
+            <div class="replay-steps-list">
+              <div
+                v-for="(step, index) in replaySteps"
+                :key="index"
+                class="replay-step-item"
+                :class="{
+                  'active': index === replayStep - 1,
+                  'completed': index < replayStep - 1
+                }"
+              >
+                <div class="step-number">{{ index + 1 }}</div>
+                <div class="step-content">{{ step }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="replay-preview">
+            <div class="replay-preview-header">回放预览</div>
+            <div class="replay-preview-content">
+              <canvas ref="replayCanvasRef" class="replay-canvas" />
+              <div v-if="replayStatus === 'playing'" class="replay-indicator">
+                <span class="replay-dot"></span>回放中 {{ replayStep }}/{{ replayTotalSteps }}
+              </div>
+              <div v-if="replayStatus === 'paused'" class="replay-indicator paused">
+                <span class="replay-dot paused"></span>已暂停 {{ replayStep }}/{{ replayTotalSteps }}
+              </div>
+              <div v-if="replayStatus === 'finished'" class="replay-finished">
+                <el-icon :size="48" color="#67c23a"><CircleCheckFilled /></el-icon>
+                <p>回放完成</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div v-if="replayScript" class="replay-footer">
+        <el-input v-model="replayScript" type="textarea" :rows="6" placeholder="录制脚本内容" readonly />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -284,6 +347,7 @@ const activeTab = ref('basic')
 const recordDialogVisible = ref(false)
 const recordTargetUrl = ref('')
 const recordedScript = ref('')
+const recordedUrl = ref('')
 const recordBindCaseId = ref('')
 const recordStatus = ref<'idle' | 'recording' | 'stopped'>('idle')
 const recordFrameCount = ref(0)
@@ -292,6 +356,17 @@ let recordWs: WebSocket | null = null
 let recordSessionId = ''
 let recordImg: HTMLImageElement | null = null
 let recordEventCleanups: (() => void)[] = []
+
+// Replay dialog state
+const replayDialogVisible = ref(false)
+const replayCaseId = ref('')
+const replayScript = ref('')
+const replayStatus = ref<'idle' | 'playing' | 'paused' | 'finished'>('idle')
+const replayStep = ref(0)
+const replayTotalSteps = ref(0)
+const replayCanvasRef = ref<HTMLCanvasElement | null>(null)
+const replaySteps = ref<string[]>([])
+let replayAbortController: AbortController | null = null
 
 const defaultForm = () => ({
   folder_id: selectedFolderId.value || '',
@@ -678,6 +753,7 @@ async function handleEmptyTrash() {
 function showRecordDialog() {
   recordTargetUrl.value = ''
   recordedScript.value = ''
+  recordedUrl.value = ''
   recordBindCaseId.value = ''
   recordStatus.value = 'idle'
   recordFrameCount.value = 0
@@ -700,15 +776,42 @@ function sendRecordEvent(event: any) {
 }
 
 function bindRecordCanvasEvents(canvas: HTMLCanvasElement) {
+  let isDragging = false
+
   const onClick = (e: MouseEvent) => {
     if (recordStatus.value !== 'recording') return
+    e.preventDefault()
     const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
     sendRecordEvent({ type: 'click', x, y })
   }
   const onDblClick = (e: MouseEvent) => {
     if (recordStatus.value !== 'recording') return
+    e.preventDefault()
     const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
     sendRecordEvent({ type: 'dblclick', x, y })
+  }
+  const onMouseDown = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording') return
+    e.preventDefault()
+    e.stopPropagation()
+    const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+    isDragging = true
+    sendRecordEvent({ type: 'mousedown', x, y })
+  }
+  const onMouseMove = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording' || !isDragging) return
+    e.preventDefault()
+    const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+    sendRecordEvent({ type: 'mousemove', x, y })
+  }
+  const onMouseUp = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording') return
+    e.preventDefault()
+    if (isDragging) {
+      const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+      isDragging = false
+      sendRecordEvent({ type: 'mouseup', x, y })
+    }
   }
   const onWheel = (e: WheelEvent) => {
     if (recordStatus.value !== 'recording') return
@@ -727,11 +830,17 @@ function bindRecordCanvasEvents(canvas: HTMLCanvasElement) {
   }
   canvas.addEventListener('click', onClick)
   canvas.addEventListener('dblclick', onDblClick)
+  canvas.addEventListener('mousedown', onMouseDown)
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
   canvas.addEventListener('wheel', onWheel, { passive: false })
   document.addEventListener('keydown', onKeyDown, true)
   recordEventCleanups.push(() => {
     canvas.removeEventListener('click', onClick)
     canvas.removeEventListener('dblclick', onDblClick)
+    canvas.removeEventListener('mousedown', onMouseDown)
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
     canvas.removeEventListener('wheel', onWheel)
     document.removeEventListener('keydown', onKeyDown, true)
   })
@@ -794,6 +903,7 @@ async function handleRecordStop() {
     recordEventCleanups = []
     const res = await stopRecording(recordSessionId)
     recordedScript.value = res.data.script || ''
+    recordedUrl.value = res.data.url || ''
     recordStatus.value = 'stopped'
     recordSessionId = ''
     ElMessage.success('录制完成')
@@ -818,11 +928,425 @@ function handleRecordClose() {
 async function bindRecordedScript() {
   if (!recordBindCaseId.value || !recordedScript.value) return
   try {
-    await updateCase(recordBindCaseId.value, { ui_script: recordedScript.value, ui_script_type: 'PLAYWRIGHT' })
+    const updateData: any = { ui_script: recordedScript.value, ui_script_type: 'PLAYWRIGHT' }
+    if (recordedUrl.value) {
+      updateData.ui_url = recordedUrl.value
+    }
+    await updateCase(recordBindCaseId.value, updateData)
     ElMessage.success('脚本已绑定到用例')
     recordDialogVisible.value = false
     fetchData()
   } catch { ElMessage.error('绑定失败') }
+}
+
+// Replay functions
+const recordedCases = computed(() => {
+  return caseList.value.filter(c => c.ui_script && c.ui_script.trim())
+})
+
+const hasRecordedScript = computed(() => {
+  return selectedCases.value.some(c => c.ui_script && c.ui_script.trim())
+})
+
+function showReplayDialog() {
+  replayDialogVisible.value = true
+  replayCaseId.value = ''
+  replayScript.value = ''
+  replayStatus.value = 'idle'
+  replayStep.value = 0
+  replayTotalSteps.value = 0
+  // Auto select first case with script if available
+  if (selectedCases.value.length === 1 && selectedCases.value[0].ui_script) {
+    replayCaseId.value = selectedCases.value[0].id
+    replayScript.value = selectedCases.value[0].ui_script
+    parseReplaySteps()
+  }
+}
+
+function loadReplayScript(caseId: string) {
+  const caseItem = caseList.value.find(c => c.id === caseId)
+  if (caseItem && caseItem.ui_script) {
+    replayScript.value = caseItem.ui_script
+    parseReplaySteps()
+  } else {
+    replayScript.value = ''
+    replayTotalSteps.value = 0
+  }
+  replayStatus.value = 'idle'
+  replayStep.value = 0
+}
+
+function parseReplaySteps() {
+  try {
+    const steps = replayScript.value.split('\n').filter(line => line.trim() && !line.startsWith('//'))
+    replaySteps.value = steps
+    replayTotalSteps.value = steps.length
+  } catch {
+    replaySteps.value = []
+    replayTotalSteps.value = 0
+  }
+}
+
+function handleReplayAction() {
+  if (replayStatus.value === 'idle' || replayStatus.value === 'finished') {
+    startReplay()
+  } else if (replayStatus.value === 'playing') {
+    pauseReplay()
+  } else if (replayStatus.value === 'paused') {
+    resumeReplay()
+  }
+}
+
+async function startReplay() {
+  if (!replayScript.value) return
+
+  // First set status to playing to show the canvas
+  replayStatus.value = 'playing'
+  replayStep.value = 0
+  replayAbortController = new AbortController()
+
+  // Wait for Vue to update the DOM and show the canvas
+  await nextTick()
+  await new Promise(resolve => setTimeout(resolve, 300))
+
+  const canvas = replayCanvasRef.value
+  if (!canvas) {
+    console.error('Canvas ref is null')
+    return
+  }
+  const ctx = canvas.getContext('2d')
+  if (!ctx) {
+    console.error('Cannot get canvas context')
+    return
+  }
+
+  // Set fixed canvas dimensions
+  canvas.width = 760
+  canvas.height = 460
+
+  // Draw initial frame immediately
+  drawBrowserFrame(ctx, canvas.width, canvas.height, '准备开始回放...', 0, replaySteps.value.length)
+
+  for (let i = 0; i < replaySteps.value.length; i++) {
+    if (replayAbortController?.signal.aborted) return
+
+    // Wait while paused
+    while ((replayStatus.value as string) === 'paused') {
+      if (replayAbortController?.signal.aborted) return
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+
+    if (replayAbortController?.signal.aborted) return
+
+    replayStep.value = i + 1
+    const step = replaySteps.value[i].trim()
+
+    // Draw browser-like interface
+    drawBrowserFrame(ctx, canvas.width, canvas.height, step, i, replaySteps.value.length)
+
+    // Wait between steps
+    await new Promise(resolve => setTimeout(resolve, 800))
+  }
+
+  if (!replayAbortController?.signal.aborted) {
+    replayStatus.value = 'finished'
+    ElMessage.success('回放完成')
+  }
+}
+
+function drawBrowserFrame(ctx: CanvasRenderingContext2D, width: number, height: number, step: string, currentStep: number, totalSteps: number) {
+  // Clear canvas
+  ctx.clearRect(0, 0, width, height)
+
+  // Draw browser window background
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, width, height)
+
+  // Draw title bar
+  ctx.fillStyle = '#e8e8e8'
+  ctx.fillRect(0, 0, width, 40)
+
+  // Draw window controls (red, yellow, green dots)
+  ctx.fillStyle = '#ff5f57'
+  ctx.beginPath()
+  ctx.arc(20, 20, 6, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.fillStyle = '#ffbd2e'
+  ctx.beginPath()
+  ctx.arc(45, 20, 6, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.fillStyle = '#28c940'
+  ctx.beginPath()
+  ctx.arc(70, 20, 6, 0, Math.PI * 2)
+  ctx.fill()
+
+  // Draw address bar
+  ctx.fillStyle = '#f5f5f5'
+  ctx.strokeStyle = '#d0d0d0'
+  ctx.lineWidth = 1
+  ctx.fillRect(100, 8, width - 120, 24)
+  ctx.strokeRect(100, 8, width - 120, 24)
+
+  // Draw address bar text
+  ctx.fillStyle = '#666'
+  ctx.font = '12px Arial'
+  ctx.fillText('https://example.com/demo', 110, 24)
+
+  // Draw content area
+  ctx.fillStyle = '#f9f9f9'
+  ctx.fillRect(0, 40, width, height - 80)
+
+  // Parse and visualize the step
+  const stepLower = step.toLowerCase()
+  let actionType = 'default'
+  let actionTarget = ''
+  let actionText = ''
+
+  // Parse step to determine action type
+  if (stepLower.includes('click') || stepLower.includes('点击') || stepLower.includes('tap')) {
+    actionType = 'click'
+    actionTarget = extractTarget(step)
+  } else if (stepLower.includes('type') || stepLower.includes('input') || stepLower.includes('输入') || stepLower.includes('fill') || stepLower.includes('set')) {
+    actionType = 'type'
+    actionText = extractText(step)
+    actionTarget = extractTarget(step)
+  } else if (stepLower.includes('navigate') || stepLower.includes('goto') || stepLower.includes('访问') || stepLower.includes('goto') || stepLower.includes('url')) {
+    actionType = 'navigate'
+    actionTarget = extractUrl(step)
+  } else if (stepLower.includes('scroll') || stepLower.includes('滚动') || stepLower.includes('mouse.wheel')) {
+    actionType = 'scroll'
+  }
+
+  // Draw mock webpage content based on action
+  drawMockContent(ctx, width, height, actionType, actionTarget, actionText, step)
+
+  // Draw action highlight
+  drawActionHighlight(ctx, width, height, actionType, actionTarget)
+
+  // Draw step info overlay
+  drawStepInfo(ctx, width, height, step, currentStep, totalSteps)
+}
+
+function extractTarget(step: string): string {
+  const match = step.match(/['"]([^'"]+)['"]/) || step.match(/(?:button|link|input|element|selector)\s+(\S+)/i)
+  return match ? match[1] : '元素'
+}
+
+function extractText(step: string): string {
+  const match = step.match(/(?:type|input|输入|fill|set)\s+['"]([^'"]+)['"]/i)
+  return match ? match[1] : '示例文本'
+}
+
+function extractUrl(step: string): string {
+  const match = step.match(/(?:navigate|goto|访问|url)\s+(https?:\/\/\S+|\/\S+)/i)
+  return match ? match[1] : 'https://example.com'
+}
+
+function drawMockContent(ctx: CanvasRenderingContext2D, width: number, height: number, actionType: string, target: string, text: string, step: string) {
+  const contentY = 50
+  const contentHeight = height - 90
+
+  // Draw page header
+  ctx.fillStyle = '#409eff'
+  ctx.fillRect(0, contentY, width, 50)
+  ctx.fillStyle = '#fff'
+  ctx.font = 'bold 16px Arial'
+  ctx.fillText('示例应用', 20, contentY + 32)
+
+  // Draw navigation bar
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(0, contentY + 50, width, 40)
+  ctx.strokeStyle = '#e0e0e0'
+  ctx.strokeRect(0, contentY + 50, width, 40)
+
+  const navItems = ['首页', '产品', '关于', '联系']
+  ctx.fillStyle = '#333'
+  ctx.font = '14px Arial'
+  navItems.forEach((item, index) => {
+    ctx.fillText(item, 20 + index * 80, contentY + 75)
+  })
+
+  // Draw main content area
+  ctx.fillStyle = '#fff'
+  ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+  ctx.strokeStyle = '#e0e0e0'
+  ctx.strokeRect(20, contentY + 100, width - 40, contentHeight - 150)
+
+  // Draw content based on action type
+  if (actionType === 'click') {
+    // Draw button
+    ctx.fillStyle = '#409eff'
+    ctx.fillRect(width / 2 - 60, contentY + 200, 120, 40)
+    ctx.fillStyle = '#fff'
+    ctx.font = '14px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText(target || '点击按钮', width / 2, contentY + 225)
+    ctx.textAlign = 'left'
+
+    // Draw click highlight
+    ctx.strokeStyle = '#ff6b6b'
+    ctx.lineWidth = 3
+    ctx.setLineDash([5, 5])
+    ctx.strokeRect(width / 2 - 65, contentY + 195, 130, 50)
+    ctx.setLineDash([])
+    ctx.lineWidth = 1
+  } else if (actionType === 'type') {
+    // Draw input field
+    ctx.fillStyle = '#fff'
+    ctx.strokeStyle = '#d0d0d0'
+    ctx.lineWidth = 1
+    ctx.fillRect(width / 2 - 150, contentY + 200, 300, 40)
+    ctx.strokeRect(width / 2 - 150, contentY + 200, 300, 40)
+
+    // Draw input text
+    ctx.fillStyle = '#333'
+    ctx.font = '14px Arial'
+    ctx.fillText(text || '输入内容', width / 2 - 140, contentY + 225)
+
+    // Draw cursor
+    const textWidth = ctx.measureText(text || '输入内容').width
+    ctx.fillStyle = '#333'
+    ctx.fillRect(width / 2 - 140 + textWidth + 2, contentY + 208, 2, 24)
+  } else if (actionType === 'navigate') {
+    // Draw loading state
+    ctx.fillStyle = '#f0f0f0'
+    ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+    ctx.fillStyle = '#409eff'
+    ctx.font = '16px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('页面加载中...', width / 2, contentY + 220)
+    ctx.textAlign = 'left'
+
+    // Draw progress bar
+    ctx.fillStyle = '#e0e0e0'
+    ctx.fillRect(width / 2 - 100, contentY + 240, 200, 8)
+    ctx.fillStyle = '#409eff'
+    ctx.fillRect(width / 2 - 100, contentY + 240, 100, 8)
+  } else if (actionType === 'scroll') {
+    // Draw scroll indicator
+    ctx.fillStyle = '#666'
+    ctx.font = '14px Arial'
+    ctx.textAlign = 'center'
+    ctx.fillText('↓ 页面滚动 ↓', width / 2, contentY + 220)
+    ctx.textAlign = 'left'
+
+    // Draw scroll arrow
+    ctx.fillStyle = '#409eff'
+    ctx.beginPath()
+    ctx.moveTo(width / 2 - 10, contentY + 240)
+    ctx.lineTo(width / 2 + 10, contentY + 240)
+    ctx.lineTo(width / 2, contentY + 255)
+    ctx.closePath()
+    ctx.fill()
+  } else {
+    // Default: show step text
+    ctx.fillStyle = '#666'
+    ctx.font = '13px Arial'
+    ctx.textAlign = 'center'
+    const displayText = step.length > 40 ? step.substring(0, 40) + '...' : step
+    ctx.fillText(displayText, width / 2, contentY + 220)
+    ctx.textAlign = 'left'
+  }
+
+  // Draw status bar
+  ctx.fillStyle = '#f5f5f5'
+  ctx.fillRect(0, height - 40, width, 40)
+  ctx.strokeStyle = '#e0e0e0'
+  ctx.strokeRect(0, height - 40, width, 40)
+  ctx.fillStyle = '#666'
+  ctx.font = '12px Arial'
+  ctx.fillText('就绪', 10, height - 15)
+}
+
+function drawActionHighlight(ctx: CanvasRenderingContext2D, width: number, _height: number, actionType: string, _target: string) {
+  const indicatorX = width - 30
+  const indicatorY = 55
+
+  ctx.fillStyle = actionType === 'click' ? '#ff6b6b' :
+                  actionType === 'type' ? '#4ecdc4' :
+                  actionType === 'navigate' ? '#45b7d1' : '#96ceb4'
+  ctx.beginPath()
+  ctx.arc(indicatorX, indicatorY, 8, 0, Math.PI * 2)
+  ctx.fill()
+
+  ctx.fillStyle = '#333'
+  ctx.font = '12px Arial'
+  ctx.textAlign = 'right'
+  const actionLabel = actionType === 'click' ? '点击' :
+                      actionType === 'type' ? '输入' :
+                      actionType === 'navigate' ? '导航' :
+                      actionType === 'scroll' ? '滚动' : '执行'
+  ctx.fillText(actionLabel, indicatorX - 15, indicatorY + 4)
+  ctx.textAlign = 'left'
+}
+
+function drawStepInfo(ctx: CanvasRenderingContext2D, width: number, height: number, step: string, currentStep: number, totalSteps: number) {
+  const boxX = 20
+  const boxY = height - 75
+  const boxWidth = width - 40
+  const boxHeight = 30
+
+  // Draw info box background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)'
+  ctx.fillRect(boxX, boxY, boxWidth, boxHeight)
+
+  // Draw step text
+  ctx.fillStyle = '#fff'
+  ctx.font = '13px Arial'
+  const stepText = `步骤 ${currentStep + 1}/${totalSteps}: ${step}`
+  const maxWidth = boxWidth - 20
+
+  if (ctx.measureText(stepText).width > maxWidth) {
+    let truncated = stepText
+    while (ctx.measureText(truncated + '...').width > maxWidth && truncated.length > 0) {
+      truncated = truncated.slice(0, -1)
+    }
+    ctx.fillText(truncated + '...', boxX + 10, boxY + 20)
+  } else {
+    ctx.fillText(stepText, boxX + 10, boxY + 20)
+  }
+
+  // Draw progress bar
+  const progressBarY = height - 40
+  const progressBarWidth = width - 40
+  const progress = totalSteps > 0 ? (currentStep + 1) / totalSteps : 0
+
+  ctx.fillStyle = '#e0e0e0'
+  ctx.fillRect(boxX, progressBarY, progressBarWidth, 6)
+  ctx.fillStyle = '#409eff'
+  ctx.fillRect(boxX, progressBarY, progressBarWidth * progress, 6)
+}
+
+function pauseReplay() {
+  replayStatus.value = 'paused'
+}
+
+function resumeReplay() {
+  replayStatus.value = 'playing'
+}
+
+function stopReplay() {
+  if (replayAbortController) {
+    replayAbortController.abort()
+    replayAbortController = null
+  }
+  replayStatus.value = 'idle'
+  replayStep.value = 0
+  ElMessage.info('回放已结束')
+}
+
+function handleReplayClose() {
+  if (replayAbortController) {
+    replayAbortController.abort()
+    replayAbortController = null
+  }
+  replayStatus.value = 'idle'
+  replayStep.value = 0
+  replayScript.value = ''
+  replayCaseId.value = ''
+  replaySteps.value = []
 }
 
 fetchData()
@@ -868,12 +1392,39 @@ fetchFolderTree()
 :deep(.highlighted-row) { background-color: var(--el-color-primary-light-9) !important; }
 :deep(.highlighted-row:hover > td) { background-color: var(--el-color-primary-light-8) !important; }
 .record-toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.record-viewport { width: 100%; height: 60vh; background: #1a1a2e; border-radius: 8px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; }
-.record-canvas { max-width: 100%; max-height: 100%; object-fit: contain; }
+.record-viewport { width: 100%; height: 60vh; background: #1a1a2e; border-radius: 8px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; user-select: none; }
+.record-canvas { max-width: 100%; max-height: 100%; object-fit: contain; touch-action: none; pointer-events: auto; user-select: none; }
 .record-placeholder { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--el-text-color-secondary); }
 .record-footer { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
 .record-indicator { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--el-color-danger); font-weight: 600; }
 .record-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--el-color-danger); animation: pulse 1s infinite; }
 .frame-counter { font-size: 12px; color: var(--el-text-color-secondary); font-weight: 400; }
 @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
+
+/* Replay styles */
+.replay-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.replay-viewport { width: 100%; height: 60vh; background: #f5f5f5; border-radius: 8px; overflow: hidden; position: relative; }
+.replay-content { display: flex; height: 100%; }
+.replay-steps { width: 300px; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; background: #fff; }
+.replay-steps-header { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid #e0e0e0; background: #fafafa; }
+.replay-steps-list { flex: 1; overflow-y: auto; padding: 8px; }
+.replay-step-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 4px; margin-bottom: 4px; }
+.replay-step-item.active { background: #e6f7ff; border: 1px solid #91d5ff; }
+.replay-step-item.completed { opacity: 0.6; }
+.step-number { width: 24px; height: 24px; border-radius: 50%; background: #d9d9d9; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+.replay-step-item.active .step-number { background: #1890ff; color: #fff; }
+.replay-step-item.completed .step-number { background: #52c41a; color: #fff; }
+.step-content { flex: 1; font-size: 13px; word-break: break-all; }
+.replay-preview { flex: 1; display: flex; flex-direction: column; }
+.replay-preview-header { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid #e0e0e0; background: #fafafa; }
+.replay-preview-content { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.replay-canvas { border: 1px solid #e0e0e0; border-radius: 4px; background: #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1); display: block; }
+.replay-placeholder { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 12px; color: var(--el-text-color-secondary); }
+.replay-indicator { position: absolute; top: 16px; right: 16px; display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--el-color-primary); font-weight: 600; background: rgba(255,255,255,0.9); padding: 8px 16px; border-radius: 8px; }
+.replay-indicator.paused { color: var(--el-color-danger); }
+.replay-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--el-color-primary); animation: pulse 1s infinite; }
+.replay-dot.paused { background: var(--el-color-danger); animation: none; }
+.replay-finished { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.replay-finished p { color: var(--el-color-success); font-size: 16px; font-weight: 600; }
+.replay-footer { margin-top: 12px; }
 </style>
