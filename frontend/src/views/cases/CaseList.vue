@@ -22,7 +22,7 @@
               <span>垃圾桶</span>
               <div>
                 <el-button type="danger" icon="Delete" @click="handleEmptyTrash">清空垃圾桶</el-button>
-                <el-button @click="showTrash = false; selectedFolderId = null; fetchData()">返回</el-button>
+                <el-button @click="showTrash = false; selectedFolderId = null; selectedCaseId = null; selectedCaseName = null; fetchData()">返回</el-button>
               </div>
             </div>
           </template>
@@ -100,7 +100,7 @@
         <!-- Right: Case Table -->
         <div class="case-panel">
           <div class="case-header">
-            <span class="case-title">{{ selectedFolderName }}</span>
+            <span class="case-title">{{ selectedCaseName || selectedFolderName }}</span>
             <div>
               <el-button type="warning" icon="CaretRight" :disabled="!selectedCases.length" @click="handleBatchExecute">批量执行({{ selectedCases.length }})</el-button>
               <el-button type="success" icon="VideoCamera" @click="showRecordDialog">用例录制</el-button>
@@ -255,6 +255,8 @@ const treeRef = ref<any>(null)
 const folderTree = ref<any[]>([])
 const selectedFolderId = ref<string | null>(null)
 const selectedFolderName = ref<string>('全部用例')
+const selectedCaseId = ref<string | null>(null)
+const selectedCaseName = ref<string | null>(null)
 const showTrash = ref(false)
 const trashList = ref<any[]>([])
 const trashCount = ref(0)
@@ -414,12 +416,31 @@ async function fetchData() {
   } catch {} finally { loading.value = false }
 }
 
+async function fetchSingleCase(caseId: string) {
+  loading.value = true
+  try {
+    const res = await getCaseDetail(caseId)
+    caseList.value = res.data ? [res.data] : []
+    pagination.total = 1
+    pagination.page = 1
+  } catch {} finally { loading.value = false }
+}
+
 async function fetchAuthors() {
   try { const res = await getCaseAuthors(); authorList.value = res.data || [] } catch {}
 }
 
 async function handleDelete(id: string) {
-  try { await deleteCase(id); ElMessage.success('删除成功'); fetchData(); fetchFolderTree() } catch {}
+  try {
+    await deleteCase(id)
+    ElMessage.success('删除成功')
+    if (selectedCaseId.value === id) {
+      selectedCaseId.value = null
+      selectedCaseName.value = null
+    }
+    fetchData()
+    fetchFolderTree()
+  } catch {}
 }
 
 // Execution
@@ -477,6 +498,10 @@ async function handleDeleteCaseFromTree(data: any) {
     await ElMessageBox.confirm(`确认删除用例"${data.name}"？`, '删除确认', { type: 'warning' })
     await deleteCase(data.id)
     ElMessage.success('删除成功')
+    if (selectedCaseId.value === data.id) {
+      selectedCaseId.value = null
+      selectedCaseName.value = null
+    }
     fetchData()
     fetchFolderTree()
   } catch {}
@@ -531,13 +556,18 @@ async function fetchFolderTree() {
 
 function handleNodeClick(data: any) {
   if (data.type === 'case') {
-    // Clicked a case leaf node: highlight it in the table
+    // Clicked a case leaf node: show only this case in the table
     highlightedCaseId.value = data.id
-    // Ensure the parent folder is selected so the table shows this case
+    selectedCaseId.value = data.id
+    selectedCaseName.value = data.name
+    showTrash.value = false
+    fetchSingleCase(data.id)
     return
   }
   // Clicked a folder: select it and filter the table
   highlightedCaseId.value = null
+  selectedCaseId.value = null
+  selectedCaseName.value = null
   selectedFolderId.value = data.id
   selectedFolderName.value = data.name
   showTrash.value = false
@@ -547,6 +577,10 @@ function handleNodeClick(data: any) {
 
 function handleCaseRowClick(row: any) {
   highlightedCaseId.value = row.id
+  if (selectedCaseId.value) {
+    selectedCaseId.value = row.id
+    selectedCaseName.value = row.name
+  }
 }
 
 function caseRowClass({ row }: { row: any }) {
@@ -588,6 +622,8 @@ async function handleDeleteFolder(folderId: string) {
     if (selectedFolderId.value === folderId) {
       selectedFolderId.value = null
       selectedFolderName.value = '全部用例'
+      selectedCaseId.value = null
+      selectedCaseName.value = null
     }
     fetchFolderTree()
     fetchData()
@@ -613,6 +649,8 @@ function handleFolderCommand(cmd: string, data: any) {
 async function handleTrashClick() {
   showTrash.value = true
   selectedFolderId.value = null
+  selectedCaseId.value = null
+  selectedCaseName.value = null
   highlightedCaseId.value = null
   try { const res = await getTrashList(); trashList.value = res.data || [] } catch {}
 }
