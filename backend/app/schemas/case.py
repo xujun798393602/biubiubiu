@@ -52,6 +52,7 @@ class CaseCreate(BaseModel):
     ui_url: Optional[str] = None
     ui_script: Optional[str] = None
     ui_script_type: Optional[str] = None
+    ui_screenshots: Optional[dict] = None
 
     # API fields
     api_url: Optional[str] = None
@@ -90,6 +91,7 @@ class CaseUpdate(BaseModel):
     ui_url: Optional[str] = None
     ui_script: Optional[str] = None
     ui_script_type: Optional[str] = None
+    ui_screenshots: Optional[dict] = None
 
     # API fields
     api_url: Optional[str] = None
@@ -129,6 +131,7 @@ class CaseItem(ItemBase):
     ui_url: Optional[str] = None
     ui_script: Optional[str] = None
     ui_script_type: Optional[str] = None
+    ui_screenshots: Optional[dict] = None
 
     # API fields
     api_url: Optional[str] = None

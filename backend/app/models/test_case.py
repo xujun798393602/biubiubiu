@@ -59,6 +59,7 @@ class TestCase(BaseModel):
     ui_script: Mapped[str | None] = mapped_column(Text, nullable=True, server_default=text("''"), comment="UI 自动化脚本")
     ui_script_type: Mapped[str | None] = mapped_column(String(16), nullable=True, comment="脚本类型: MANUAL/PLAYWRIGHT/SELENIUM")
     ui_steps: Mapped[list | None] = mapped_column(JSONB, nullable=True, comment="UI 操作步骤")
+    ui_screenshots: Mapped[dict | None] = mapped_column(JSONB, nullable=True, comment="UI 录制截图: {screenshots: [...], line_to_action: [...]}")
 
     # Performance test fields
     perf_url: Mapped[str | None] = mapped_column(String(512), nullable=True, comment="压测目标 URL")

@@ -24,6 +24,7 @@ class RecordingSession:
         self.cdp_session = None
         self.is_recording = False
         self.actions: list[dict] = []
+        self.screenshots: list[str] = []  # base64 JPEG screenshots, one per action
         self.started_at = datetime.now(timezone.utc).isoformat()
         self._push_task: asyncio.Task | None = None
 
@@ -36,6 +37,7 @@ class RecordingSession:
         self.cdp_session = await self.page.context.new_cdp_session(self.page)
         self.is_recording = True
         self.actions.append({"type": "goto", "url": self.url})
+        await self._capture_action_screenshot()
 
     async def capture_frame(self) -> bytes:
         result = await self.cdp_session.send(
@@ -53,6 +55,14 @@ class RecordingSession:
             },
         )
         return base64.b64decode(result["data"])
+
+    async def _capture_action_screenshot(self):
+        """Capture a screenshot and store as base64 for replay."""
+        try:
+            frame = await self.capture_frame()
+            self.screenshots.append(base64.b64encode(frame).decode("ascii"))
+        except Exception:
+            self.screenshots.append("")
 
     async def push_frames(self, ws: WebSocket):
         interval = 1.0 / self.TARGET_FPS
@@ -114,6 +124,7 @@ class RecordingSession:
                 self.actions.append(
                     {"type": "click", "x": x, "y": y, "selector": selector}
                 )
+                await self._capture_action_screenshot()
             elif event_type == "dblclick":
                 x, y = event["x"], event["y"]
                 selector = await self.get_selector_at(x, y)
@@ -121,41 +132,54 @@ class RecordingSession:
                 self.actions.append(
                     {"type": "dblclick", "x": x, "y": y, "selector": selector}
                 )
+                await self._capture_action_screenshot()
             elif event_type == "mousedown":
                 x, y = event["x"], event["y"]
                 await self.page.mouse.move(x, y)
                 await self.page.mouse.down()
                 self.actions.append({"type": "mousedown", "x": x, "y": y})
+                await self._capture_action_screenshot()
             elif event_type == "mousemove":
                 x, y = event["x"], event["y"]
                 await self.page.mouse.move(x, y)
                 self.actions.append({"type": "mousemove", "x": x, "y": y})
+                # Skip screenshot for mousemove to avoid excessive captures
             elif event_type == "mouseup":
                 x, y = event["x"], event["y"]
                 await self.page.mouse.move(x, y)
                 await self.page.mouse.up()
                 self.actions.append({"type": "mouseup", "x": x, "y": y})
+                await self._capture_action_screenshot()
             elif event_type == "type":
                 text = event["text"]
                 await self.page.keyboard.type(text)
                 self.actions.append({"type": "type", "text": text})
+                await self._capture_action_screenshot()
             elif event_type == "keypress":
                 key = event["key"]
                 await self.page.keyboard.press(key)
                 self.actions.append({"type": "keypress", "key": key})
+                await self._capture_action_screenshot()
             elif event_type == "scroll":
                 dx, dy = event.get("deltaX", 0), event.get("deltaY", 0)
                 await self.page.mouse.wheel(dx, dy)
                 self.actions.append({"type": "scroll", "deltaX": dx, "deltaY": dy})
+                await self._capture_action_screenshot()
             elif event_type == "navigate":
                 url = event["url"]
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 self.actions.append({"type": "goto", "url": url})
+                await self._capture_action_screenshot()
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f"[RecordingSession] handle_event error: {e}")
 
     def generate_script(self) -> str:
+        script, _ = self._generate_script_with_mapping()
+        return script
+
+    def _generate_script_with_mapping(self) -> tuple[str, list[int | None]]:
+        """Generate script and a mapping from script-line-index → action-index."""
         lines = [
             "from playwright.sync_api import sync_playwright",
             "",
@@ -164,10 +188,14 @@ class RecordingSession:
             "    browser = playwright.chromium.launch(headless=True)",
             "    page = browser.new_page()",
         ]
-        for action in self.actions:
+        # line_to_action[i] = index into self.actions / self.screenshots, or None
+        line_to_action: list[int | None] = [None] * len(lines)
+
+        for action_idx, action in enumerate(self.actions):
             atype = action["type"]
             if atype == "goto":
                 lines.append(f'    page.goto("{action["url"]}")')
+                line_to_action.append(action_idx)
             elif atype == "click":
                 sel = action.get("selector", "")
                 if sel:
@@ -176,6 +204,7 @@ class RecordingSession:
                     lines.append(
                         f'    page.mouse.click({action["x"]}, {action["y"]})'
                     )
+                line_to_action.append(action_idx)
             elif atype == "dblclick":
                 sel = action.get("selector", "")
                 if sel:
@@ -184,32 +213,43 @@ class RecordingSession:
                     lines.append(
                         f'    page.mouse.dblclick({action["x"]}, {action["y"]})'
                     )
+                line_to_action.append(action_idx)
             elif atype == "mousedown":
                 lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+                line_to_action.append(action_idx)
                 lines.append('    page.mouse.down()')
+                line_to_action.append(action_idx)
             elif atype == "mousemove":
                 lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+                line_to_action.append(action_idx)
             elif atype == "mouseup":
                 lines.append(f'    page.mouse.move({action["x"]}, {action["y"]})')
+                line_to_action.append(action_idx)
                 lines.append('    page.mouse.up()')
+                line_to_action.append(action_idx)
             elif atype == "type":
                 text = action["text"].replace('"', '\\"')
                 lines.append(f'    page.keyboard.type("{text}")')
+                line_to_action.append(action_idx)
             elif atype == "keypress":
                 lines.append(f'    page.keyboard.press("{action["key"]}")')
+                line_to_action.append(action_idx)
             elif atype == "scroll":
                 lines.append(
                     f'    page.mouse.wheel({action["deltaX"]}, {action["deltaY"]})'
                 )
-        lines.extend([
+                line_to_action.append(action_idx)
+        footer_lines = [
             "    browser.close()",
             "",
             "",
             "with sync_playwright() as p:",
             "    run(p)",
             "",
-        ])
-        return "\n".join(lines)
+        ]
+        lines.extend(footer_lines)
+        line_to_action.extend([None] * len(footer_lines))
+        return "\n".join(lines), line_to_action
 
     async def cleanup(self):
         self.is_recording = False
@@ -261,10 +301,11 @@ class RecordingManager:
     async def remove_session(self, session_id: str) -> dict | None:
         session = self._sessions.pop(session_id, None)
         if session:
-            script = session.generate_script()
+            script, line_to_action = session._generate_script_with_mapping()
             url = session.url
+            screenshots = session.screenshots
             await session.cleanup()
-            return {"script": script, "url": url}
+            return {"script": script, "url": url, "screenshots": screenshots, "line_to_action": line_to_action}
         return None
 
     async def shutdown(self):

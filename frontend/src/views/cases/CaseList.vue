@@ -259,11 +259,13 @@
               <div
                 v-for="(step, index) in replaySteps"
                 :key="index"
-                class="replay-step-item"
+                class="replay-step-item clickable"
                 :class="{
                   'active': index === replayStep - 1,
-                  'completed': index < replayStep - 1
+                  'completed': index < replayStep - 1,
+                  'selected': index === selectedStep
                 }"
+                @click="handleStepClick(index)"
               >
                 <div class="step-number">{{ index + 1 }}</div>
                 <div class="step-content">{{ step }}</div>
@@ -280,7 +282,7 @@
               <div v-if="replayStatus === 'paused'" class="replay-indicator paused">
                 <span class="replay-dot paused"></span>已暂停 {{ replayStep }}/{{ replayTotalSteps }}
               </div>
-              <div v-if="replayStatus === 'finished'" class="replay-finished">
+              <div v-if="replayStatus === 'finished' && selectedStep === null" class="replay-finished">
                 <el-icon :size="48" color="#67c23a"><CircleCheckFilled /></el-icon>
                 <p>回放完成</p>
               </div>
@@ -366,7 +368,11 @@ const replayStep = ref(0)
 const replayTotalSteps = ref(0)
 const replayCanvasRef = ref<HTMLCanvasElement | null>(null)
 const replaySteps = ref<string[]>([])
+const selectedStep = ref<number | null>(null)
 let replayAbortController: AbortController | null = null
+// Screenshots captured during recording for replay display
+let recordedScreenshots: string[] = []
+let recordedLineToAction: (number | null)[] = []
 
 const defaultForm = () => ({
   folder_id: selectedFolderId.value || '',
@@ -904,6 +910,8 @@ async function handleRecordStop() {
     const res = await stopRecording(recordSessionId)
     recordedScript.value = res.data.script || ''
     recordedUrl.value = res.data.url || ''
+    recordedScreenshots = res.data.screenshots || []
+    recordedLineToAction = res.data.line_to_action || []
     recordStatus.value = 'stopped'
     recordSessionId = ''
     ElMessage.success('录制完成')
@@ -932,7 +940,16 @@ async function bindRecordedScript() {
     if (recordedUrl.value) {
       updateData.ui_url = recordedUrl.value
     }
-    await updateCase(recordBindCaseId.value, updateData)
+    if (recordedScreenshots.length > 0) {
+      updateData.ui_screenshots = { screenshots: recordedScreenshots, line_to_action: recordedLineToAction }
+    }
+    try {
+      await updateCase(recordBindCaseId.value, updateData)
+    } catch {
+      // If saving with screenshots fails (e.g. column not migrated), retry without
+      delete updateData.ui_screenshots
+      await updateCase(recordBindCaseId.value, updateData)
+    }
     ElMessage.success('脚本已绑定到用例')
     recordDialogVisible.value = false
     fetchData()
@@ -954,12 +971,27 @@ function showReplayDialog() {
   replayScript.value = ''
   replayStatus.value = 'idle'
   replayStep.value = 0
+  selectedStep.value = null
   replayTotalSteps.value = 0
+  replayScreenshotImages = []
+  // Keep recordedScreenshots/recordedLineToAction if they exist from a fresh recording
+  // Only clear them if there's nothing fresh
+  if (recordedScreenshots.length === 0) {
+    recordedLineToAction = []
+  }
   // Auto select first case with script if available
   if (selectedCases.value.length === 1 && selectedCases.value[0].ui_script) {
     replayCaseId.value = selectedCases.value[0].id
     replayScript.value = selectedCases.value[0].ui_script
     parseReplaySteps()
+    // Load screenshots from case data only if we don't have fresh ones from recording
+    if (recordedScreenshots.length === 0) {
+      const caseItem = selectedCases.value[0]
+      if (caseItem.ui_screenshots) {
+        recordedScreenshots = caseItem.ui_screenshots.screenshots || []
+        recordedLineToAction = caseItem.ui_screenshots.line_to_action || []
+      }
+    }
   }
 }
 
@@ -968,19 +1000,43 @@ function loadReplayScript(caseId: string) {
   if (caseItem && caseItem.ui_script) {
     replayScript.value = caseItem.ui_script
     parseReplaySteps()
+    // Load screenshots if available
+    if (caseItem.ui_screenshots) {
+      recordedScreenshots = caseItem.ui_screenshots.screenshots || []
+      recordedLineToAction = caseItem.ui_screenshots.line_to_action || []
+    } else {
+      recordedScreenshots = []
+      recordedLineToAction = []
+    }
   } else {
     replayScript.value = ''
     replayTotalSteps.value = 0
+    recordedScreenshots = []
+    recordedLineToAction = []
   }
   replayStatus.value = 'idle'
   replayStep.value = 0
+  selectedStep.value = null
 }
 
 function parseReplaySteps() {
   try {
-    const steps = replayScript.value.split('\n').filter(line => line.trim() && !line.startsWith('//'))
-    replaySteps.value = steps
-    replayTotalSteps.value = steps.length
+    const allLines = replayScript.value.split('\n')
+    const filteredSteps: string[] = []
+    const filteredLineToAction: (number | null)[] = []
+    for (let i = 0; i < allLines.length; i++) {
+      const line = allLines[i]
+      if (!line.trim() || line.trim().startsWith('//')) continue
+      filteredSteps.push(line)
+      // Map from original line index to action index
+      filteredLineToAction.push(
+        recordedLineToAction.length > i ? recordedLineToAction[i] : null
+      )
+    }
+    replaySteps.value = filteredSteps
+    replayTotalSteps.value = filteredSteps.length
+    // Update the mapping to match filtered step indices
+    recordedLineToAction = filteredLineToAction
   } catch {
     replaySteps.value = []
     replayTotalSteps.value = 0
@@ -1000,14 +1056,21 @@ function handleReplayAction() {
 async function startReplay() {
   if (!replayScript.value) return
 
+  // Reset URL state
+  currentReplayUrl = 'about:blank'
+
   // First set status to playing to show the canvas
   replayStatus.value = 'playing'
   replayStep.value = 0
+  selectedStep.value = null
   replayAbortController = new AbortController()
 
   // Wait for Vue to update the DOM and show the canvas
   await nextTick()
   await new Promise(resolve => setTimeout(resolve, 300))
+
+  // Preload screenshots if available
+  await preloadReplayScreenshots()
 
   const canvas = replayCanvasRef.value
   if (!canvas) {
@@ -1054,9 +1117,137 @@ async function startReplay() {
   }
 }
 
+async function handleStepClick(index: number) {
+  selectedStep.value = index
+  replayStep.value = index + 1
+
+  const canvas = replayCanvasRef.value
+  if (!canvas) return
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+
+  canvas.width = 760
+  canvas.height = 460
+
+  if (replayScreenshotImages.length === 0 && recordedScreenshots.length > 0) {
+    await preloadReplayScreenshots()
+  }
+
+  const step = replaySteps.value[index].trim()
+  drawBrowserFrame(ctx, canvas.width, canvas.height, step, index, replaySteps.value.length)
+}
+
+// Parse Playwright script line to extract action info
+function parsePlaywrightStep(step: string): { type: string; selector?: string; text?: string; url?: string; x?: number; y?: number; key?: string; deltaX?: number; deltaY?: number } {
+  const trimmed = step.trim()
+
+  // page.goto("url")
+  const gotoMatch = trimmed.match(/page\.goto\(["']([^"']+)["']\)/)
+  if (gotoMatch) return { type: 'goto', url: gotoMatch[1] }
+
+  // page.click("selector") or page.dblclick("selector")
+  const clickMatch = trimmed.match(/page\.(click|dblclick)\(["']([^"']+)["']\)/)
+  if (clickMatch) return { type: clickMatch[1], selector: clickMatch[2] }
+
+  // page.mouse.click(x, y) or page.mouse.dblclick(x, y)
+  const mouseClickMatch = trimmed.match(/page\.mouse\.(click|dblclick)\((\d+),\s*(\d+)\)/)
+  if (mouseClickMatch) return { type: mouseClickMatch[1], x: parseInt(mouseClickMatch[2]), y: parseInt(mouseClickMatch[3]) }
+
+  // page.mouse.move(x, y)
+  const mouseMoveMatch = trimmed.match(/page\.mouse\.move\((\d+),\s*(\d+)\)/)
+  if (mouseMoveMatch) return { type: 'mousemove', x: parseInt(mouseMoveMatch[1]), y: parseInt(mouseMoveMatch[2]) }
+
+  // page.mouse.down()
+  if (trimmed.includes('page.mouse.down()')) return { type: 'mousedown' }
+
+  // page.mouse.up()
+  if (trimmed.includes('page.mouse.up()')) return { type: 'mouseup' }
+
+  // page.keyboard.type("text")
+  const typeMatch = trimmed.match(/page\.keyboard\.type\(["']([^"']+)["']\)/)
+  if (typeMatch) return { type: 'type', text: typeMatch[1] }
+
+  // page.keyboard.press("key")
+  const keyMatch = trimmed.match(/page\.keyboard\.press\(["']([^"']+)["']\)/)
+  if (keyMatch) return { type: 'keypress', key: keyMatch[1] }
+
+  // page.mouse.wheel(deltaX, deltaY)
+  const wheelMatch = trimmed.match(/page\.mouse\.wheel\(([-\d]+),\s*([-\d]+)\)/)
+  if (wheelMatch) return { type: 'scroll', deltaX: parseInt(wheelMatch[1]), deltaY: parseInt(wheelMatch[2]) }
+
+  // page.fill("selector", "text")
+  const fillMatch = trimmed.match(/page\.fill\(["']([^"']+)["'],\s*["']([^"']+)["']\)/)
+  if (fillMatch) return { type: 'type', selector: fillMatch[1], text: fillMatch[2] }
+
+  // page.set_input_files or other commands
+  return { type: 'other' }
+}
+
+// Extract readable name from selector
+function selectorToName(selector: string): string {
+  if (!selector) return '元素'
+  // Extract text from selector like "text=Submit" or "button:has-text('Submit')"
+  const textMatch = selector.match(/text=(.+)/) || selector.match(/:has-text\(['"](.+?)['"]\)/)
+  if (textMatch) return textMatch[1]
+  // Extract id from "#id"
+  const idMatch = selector.match(/^#(.+)/)
+  if (idMatch) return `#${idMatch[1]}`
+  // Extract class from ".class"
+  const classMatch = selector.match(/^\.(.+)/)
+  if (classMatch) return `.${classMatch[1]}`
+  // Extract tag from "tag"
+  const tagMatch = selector.match(/^[a-z]+/)
+  if (tagMatch) return tagMatch[0]
+  return selector.length > 15 ? selector.substring(0, 15) + '...' : selector
+}
+
+// Store current page URL for address bar
+let currentReplayUrl = 'about:blank'
+
+// Preloaded screenshot images for replay (indexed by action index)
+let replayScreenshotImages: (HTMLImageElement | null)[] = []
+
+function preloadReplayScreenshots(): Promise<void> {
+  return new Promise((resolve) => {
+    replayScreenshotImages = []
+    if (recordedScreenshots.length === 0) { resolve(); return }
+    let loaded = 0
+    const total = recordedScreenshots.length
+    for (let i = 0; i < total; i++) {
+      const b64 = recordedScreenshots[i]
+      if (!b64) {
+        replayScreenshotImages.push(null)
+        loaded++
+        if (loaded >= total) resolve()
+        continue
+      }
+      const img = new Image()
+      img.onload = () => {
+        replayScreenshotImages[i] = img
+        loaded++
+        if (loaded >= total) resolve()
+      }
+      img.onerror = () => {
+        replayScreenshotImages[i] = null
+        loaded++
+        if (loaded >= total) resolve()
+      }
+      img.src = 'data:image/jpeg;base64,' + b64
+    }
+  })
+}
+
 function drawBrowserFrame(ctx: CanvasRenderingContext2D, width: number, height: number, step: string, currentStep: number, totalSteps: number) {
   // Clear canvas
   ctx.clearRect(0, 0, width, height)
+
+  // Parse the step
+  const action = parsePlaywrightStep(step)
+
+  // Update URL if navigating
+  if (action.type === 'goto' && action.url) {
+    currentReplayUrl = action.url
+  }
 
   // Draw browser window background
   ctx.fillStyle = '#ffffff'
@@ -1090,75 +1281,69 @@ function drawBrowserFrame(ctx: CanvasRenderingContext2D, width: number, height: 
   ctx.strokeRect(100, 8, width - 120, 24)
 
   // Draw address bar text
-  ctx.fillStyle = '#666'
+  ctx.fillStyle = '#333'
   ctx.font = '12px Arial'
-  ctx.fillText('https://example.com/demo', 110, 24)
+  const displayUrl = currentReplayUrl.length > 50 ? currentReplayUrl.substring(0, 50) + '...' : currentReplayUrl
+  ctx.fillText(displayUrl, 110, 24)
 
   // Draw content area
   ctx.fillStyle = '#f9f9f9'
   ctx.fillRect(0, 40, width, height - 80)
 
-  // Parse and visualize the step
-  const stepLower = step.toLowerCase()
-  let actionType = 'default'
-  let actionTarget = ''
-  let actionText = ''
-
-  // Parse step to determine action type
-  if (stepLower.includes('click') || stepLower.includes('点击') || stepLower.includes('tap')) {
-    actionType = 'click'
-    actionTarget = extractTarget(step)
-  } else if (stepLower.includes('type') || stepLower.includes('input') || stepLower.includes('输入') || stepLower.includes('fill') || stepLower.includes('set')) {
-    actionType = 'type'
-    actionText = extractText(step)
-    actionTarget = extractTarget(step)
-  } else if (stepLower.includes('navigate') || stepLower.includes('goto') || stepLower.includes('访问') || stepLower.includes('goto') || stepLower.includes('url')) {
-    actionType = 'navigate'
-    actionTarget = extractUrl(step)
-  } else if (stepLower.includes('scroll') || stepLower.includes('滚动') || stepLower.includes('mouse.wheel')) {
-    actionType = 'scroll'
+  // Try to draw actual screenshot from recording
+  const actionIdx = recordedLineToAction.length > currentStep ? recordedLineToAction[currentStep] : null
+  const screenshotImg = actionIdx != null && actionIdx < replayScreenshotImages.length ? replayScreenshotImages[actionIdx] : null
+  if (screenshotImg) {
+    // Draw the actual recorded screenshot scaled to fit the content area
+    const contentY = 40
+    const contentH = height - 80
+    const contentW = width
+    const imgAspect = screenshotImg.width / screenshotImg.height
+    const areaAspect = contentW / contentH
+    let drawW: number, drawH: number, drawX: number, drawY: number
+    if (imgAspect > areaAspect) {
+      drawW = contentW
+      drawH = contentW / imgAspect
+      drawX = 0
+      drawY = contentY + (contentH - drawH) / 2
+    } else {
+      drawH = contentH
+      drawW = contentH * imgAspect
+      drawX = (contentW - drawW) / 2
+      drawY = contentY
+    }
+    ctx.drawImage(screenshotImg, drawX, drawY, drawW, drawH)
+  } else {
+    // Fall back to generic page content drawing
+    drawPageContent(ctx, width, height, action, step)
   }
 
-  // Draw mock webpage content based on action
-  drawMockContent(ctx, width, height, actionType, actionTarget, actionText, step)
-
   // Draw action highlight
-  drawActionHighlight(ctx, width, height, actionType, actionTarget)
+  drawActionHighlight(ctx, width, height, action)
 
   // Draw step info overlay
   drawStepInfo(ctx, width, height, step, currentStep, totalSteps)
 }
 
-function extractTarget(step: string): string {
-  const match = step.match(/['"]([^'"]+)['"]/) || step.match(/(?:button|link|input|element|selector)\s+(\S+)/i)
-  return match ? match[1] : '元素'
-}
-
-function extractText(step: string): string {
-  const match = step.match(/(?:type|input|输入|fill|set)\s+['"]([^'"]+)['"]/i)
-  return match ? match[1] : '示例文本'
-}
-
-function extractUrl(step: string): string {
-  const match = step.match(/(?:navigate|goto|访问|url)\s+(https?:\/\/\S+|\/\S+)/i)
-  return match ? match[1] : 'https://example.com'
-}
-
-function drawMockContent(ctx: CanvasRenderingContext2D, width: number, height: number, actionType: string, target: string, text: string, step: string) {
+function drawPageContent(ctx: CanvasRenderingContext2D, width: number, height: number, action: { type: string; selector?: string; text?: string; url?: string; x?: number; y?: number; key?: string; deltaX?: number; deltaY?: number }, step: string) {
   const contentY = 50
   const contentHeight = height - 90
 
-  // Draw page header
-  ctx.fillStyle = '#409eff'
+  // Draw page header with gradient
+  const gradient = ctx.createLinearGradient(0, contentY, 0, contentY + 50)
+  gradient.addColorStop(0, '#409eff')
+  gradient.addColorStop(1, '#337ecc')
+  ctx.fillStyle = gradient
   ctx.fillRect(0, contentY, width, 50)
   ctx.fillStyle = '#fff'
   ctx.font = 'bold 16px Arial'
-  ctx.fillText('示例应用', 20, contentY + 32)
+  ctx.fillText('Web Application', 20, contentY + 32)
 
   // Draw navigation bar
   ctx.fillStyle = '#fff'
   ctx.fillRect(0, contentY + 50, width, 40)
   ctx.strokeStyle = '#e0e0e0'
+  ctx.lineWidth = 1
   ctx.strokeRect(0, contentY + 50, width, 40)
 
   const navItems = ['首页', '产品', '关于', '联系']
@@ -1175,79 +1360,245 @@ function drawMockContent(ctx: CanvasRenderingContext2D, width: number, height: n
   ctx.strokeRect(20, contentY + 100, width - 40, contentHeight - 150)
 
   // Draw content based on action type
-  if (actionType === 'click') {
-    // Draw button
-    ctx.fillStyle = '#409eff'
-    ctx.fillRect(width / 2 - 60, contentY + 200, 120, 40)
-    ctx.fillStyle = '#fff'
-    ctx.font = '14px Arial'
-    ctx.textAlign = 'center'
-    ctx.fillText(target || '点击按钮', width / 2, contentY + 225)
-    ctx.textAlign = 'left'
+  switch (action.type) {
+    case 'goto':
+      // Show page loading animation
+      ctx.fillStyle = '#f0f0f0'
+      ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+      ctx.fillStyle = '#409eff'
+      ctx.font = '16px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillText('页面加载中...', width / 2, contentY + 200)
+      ctx.textAlign = 'left'
 
-    // Draw click highlight
-    ctx.strokeStyle = '#ff6b6b'
-    ctx.lineWidth = 3
-    ctx.setLineDash([5, 5])
-    ctx.strokeRect(width / 2 - 65, contentY + 195, 130, 50)
-    ctx.setLineDash([])
-    ctx.lineWidth = 1
-  } else if (actionType === 'type') {
-    // Draw input field
-    ctx.fillStyle = '#fff'
-    ctx.strokeStyle = '#d0d0d0'
-    ctx.lineWidth = 1
-    ctx.fillRect(width / 2 - 150, contentY + 200, 300, 40)
-    ctx.strokeRect(width / 2 - 150, contentY + 200, 300, 40)
+      // Draw loading spinner
+      ctx.strokeStyle = '#409eff'
+      ctx.lineWidth = 3
+      ctx.beginPath()
+      ctx.arc(width / 2, contentY + 250, 20, 0, Math.PI * 1.5)
+      ctx.stroke()
+      ctx.lineWidth = 1
 
-    // Draw input text
-    ctx.fillStyle = '#333'
-    ctx.font = '14px Arial'
-    ctx.fillText(text || '输入内容', width / 2 - 140, contentY + 225)
+      // Show URL
+      ctx.fillStyle = '#666'
+      ctx.font = '12px Arial'
+      ctx.textAlign = 'center'
+      const urlText = action.url || ''
+      ctx.fillText(urlText.length > 40 ? urlText.substring(0, 40) + '...' : urlText, width / 2, contentY + 290)
+      ctx.textAlign = 'left'
+      break
 
-    // Draw cursor
-    const textWidth = ctx.measureText(text || '输入内容').width
-    ctx.fillStyle = '#333'
-    ctx.fillRect(width / 2 - 140 + textWidth + 2, contentY + 208, 2, 24)
-  } else if (actionType === 'navigate') {
-    // Draw loading state
-    ctx.fillStyle = '#f0f0f0'
-    ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
-    ctx.fillStyle = '#409eff'
-    ctx.font = '16px Arial'
-    ctx.textAlign = 'center'
-    ctx.fillText('页面加载中...', width / 2, contentY + 220)
-    ctx.textAlign = 'left'
+    case 'click':
+    case 'dblclick': {
+      // Draw clickable elements
+      const buttonY = contentY + 180
+      const buttonWidth = 120
+      const buttonHeight = 36
 
-    // Draw progress bar
-    ctx.fillStyle = '#e0e0e0'
-    ctx.fillRect(width / 2 - 100, contentY + 240, 200, 8)
-    ctx.fillStyle = '#409eff'
-    ctx.fillRect(width / 2 - 100, contentY + 240, 100, 8)
-  } else if (actionType === 'scroll') {
-    // Draw scroll indicator
-    ctx.fillStyle = '#666'
-    ctx.font = '14px Arial'
-    ctx.textAlign = 'center'
-    ctx.fillText('↓ 页面滚动 ↓', width / 2, contentY + 220)
-    ctx.textAlign = 'left'
+      // Draw multiple buttons to simulate a real page
+      const buttons = ['提交', '取消', '搜索', '登录']
+      buttons.forEach((btnText, idx) => {
+        const btnX = 40 + idx * 140
+        ctx.fillStyle = idx === 0 ? '#409eff' : '#f0f0f0'
+        ctx.fillRect(btnX, buttonY, buttonWidth, buttonHeight)
+        ctx.fillStyle = idx === 0 ? '#fff' : '#333'
+        ctx.font = '13px Arial'
+        ctx.textAlign = 'center'
+        ctx.fillText(btnText, btnX + buttonWidth / 2, buttonY + 23)
+        ctx.textAlign = 'left'
+      })
 
-    // Draw scroll arrow
-    ctx.fillStyle = '#409eff'
-    ctx.beginPath()
-    ctx.moveTo(width / 2 - 10, contentY + 240)
-    ctx.lineTo(width / 2 + 10, contentY + 240)
-    ctx.lineTo(width / 2, contentY + 255)
-    ctx.closePath()
-    ctx.fill()
-  } else {
-    // Default: show step text
-    ctx.fillStyle = '#666'
-    ctx.font = '13px Arial'
-    ctx.textAlign = 'center'
-    const displayText = step.length > 40 ? step.substring(0, 40) + '...' : step
-    ctx.fillText(displayText, width / 2, contentY + 220)
-    ctx.textAlign = 'left'
+      // Draw input fields
+      const inputY = contentY + 130
+      ctx.fillStyle = '#fff'
+      ctx.strokeStyle = '#d0d0d0'
+      ctx.fillRect(40, inputY, 200, 30)
+      ctx.strokeRect(40, inputY, 200, 30)
+      ctx.fillRect(260, inputY, 200, 30)
+      ctx.strokeRect(260, inputY, 200, 30)
+
+      // Draw labels
+      ctx.fillStyle = '#666'
+      ctx.font = '12px Arial'
+      ctx.fillText('用户名:', 40, inputY - 5)
+      ctx.fillText('密码:', 260, inputY - 5)
+
+      // Draw click highlight
+      const targetName = selectorToName(action.selector || '')
+      ctx.strokeStyle = '#ff4d4f'
+      ctx.lineWidth = 3
+      ctx.setLineDash([5, 5])
+
+      // Highlight based on selector
+      if (targetName.includes('提交') || targetName.includes('submit')) {
+        ctx.strokeRect(40 - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4)
+      } else if (targetName.includes('登录') || targetName.includes('login')) {
+        ctx.strokeRect(40 + 3 * 140 - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4)
+      } else {
+        // Default highlight on first button
+        ctx.strokeRect(40 - 2, buttonY - 2, buttonWidth + 4, buttonHeight + 4)
+      }
+      ctx.setLineDash([])
+      ctx.lineWidth = 1
+      break
+    }
+
+    case 'type': {
+      // Draw input form
+      const formY = contentY + 120
+      const inputWidth = 300
+      const inputHeight = 36
+
+      // Draw form container
+      ctx.fillStyle = '#fafafa'
+      ctx.fillRect(40, formY, width - 80, 200)
+      ctx.strokeStyle = '#e8e8e8'
+      ctx.strokeRect(40, formY, width - 80, 200)
+
+      // Draw input field with label
+      ctx.fillStyle = '#333'
+      ctx.font = '14px Arial'
+      ctx.fillText('输入框:', 60, formY + 30)
+
+      ctx.fillStyle = '#fff'
+      ctx.strokeStyle = '#409eff'
+      ctx.lineWidth = 2
+      ctx.fillRect(60, formY + 40, inputWidth, inputHeight)
+      ctx.strokeRect(60, formY + 40, inputWidth, inputHeight)
+      ctx.lineWidth = 1
+
+      // Draw typed text
+      if (action.text) {
+        ctx.fillStyle = '#333'
+        ctx.font = '14px Arial'
+        ctx.fillText(action.text, 70, formY + 63)
+
+        // Draw cursor
+        const textWidth = ctx.measureText(action.text).width
+        ctx.fillStyle = '#333'
+        ctx.fillRect(70 + textWidth + 2, formY + 48, 2, 20)
+      }
+
+      // Draw another input field
+      ctx.fillStyle = '#333'
+      ctx.font = '14px Arial'
+      ctx.fillText('密码:', 60, formY + 100)
+
+      ctx.fillStyle = '#fff'
+      ctx.strokeStyle = '#d0d0d0'
+      ctx.fillRect(60, formY + 110, inputWidth, inputHeight)
+      ctx.strokeRect(60, formY + 110, inputWidth, inputHeight)
+
+      // Draw dots for password
+      ctx.fillStyle = '#333'
+      for (let i = 0; i < 6; i++) {
+        ctx.beginPath()
+        ctx.arc(80 + i * 15, formY + 128, 3, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      break
+    }
+
+    case 'keypress': {
+      // Show keyboard action
+      ctx.fillStyle = '#f0f0f0'
+      ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+
+      // Draw keyboard icon
+      ctx.fillStyle = '#666'
+      ctx.font = '48px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillText('⌨️', width / 2, contentY + 200)
+
+      // Show key pressed
+      ctx.fillStyle = '#333'
+      ctx.font = '16px Arial'
+      ctx.fillText(`按下按键: ${action.key || ''}`, width / 2, contentY + 250)
+      ctx.textAlign = 'left'
+      break
+    }
+
+    case 'scroll': {
+      // Draw scrollable content
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+      ctx.strokeStyle = '#e0e0e0'
+      ctx.strokeRect(20, contentY + 100, width - 40, contentHeight - 150)
+
+      // Draw content blocks
+      for (let i = 0; i < 5; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#f5f5f5' : '#fff'
+        ctx.fillRect(30, contentY + 110 + i * 50, width - 60, 45)
+        ctx.fillStyle = '#666'
+        ctx.font = '13px Arial'
+        ctx.fillText(`内容块 ${i + 1}`, 50, contentY + 135 + i * 50)
+      }
+
+      // Draw scroll indicator
+      const scrollDirection = (action.deltaY || 0) > 0 ? '↓' : '↑'
+      ctx.fillStyle = '#409eff'
+      ctx.font = '24px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillText(scrollDirection, width - 40, contentY + 200)
+      ctx.textAlign = 'left'
+
+      // Draw scroll bar
+      ctx.fillStyle = '#e0e0e0'
+      ctx.fillRect(width - 30, contentY + 100, 10, contentHeight - 150)
+      ctx.fillStyle = '#409eff'
+      ctx.fillRect(width - 30, contentY + 120, 10, 40)
+      break
+    }
+
+    case 'mousemove':
+    case 'mousedown':
+    case 'mouseup': {
+      // Draw mouse cursor movement
+      ctx.fillStyle = '#f0f0f0'
+      ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+
+      // Draw some elements
+      ctx.fillStyle = '#fff'
+      ctx.fillRect(40, contentY + 130, 150, 100)
+      ctx.strokeStyle = '#e0e0e0'
+      ctx.strokeRect(40, contentY + 130, 150, 100)
+
+      ctx.fillRect(220, contentY + 130, 150, 100)
+      ctx.strokeRect(220, contentY + 130, 150, 100)
+
+      // Draw cursor at position
+      if (action.x !== undefined && action.y !== undefined) {
+        // Scale coordinates to canvas
+        const scaleX = width / 1920
+        const scaleY = height / 1080
+        const cursorX = action.x * scaleX
+        const cursorY = action.y * scaleY
+
+        // Draw cursor arrow
+        ctx.fillStyle = action.type === 'mousedown' ? '#ff4d4f' : '#333'
+        ctx.beginPath()
+        ctx.moveTo(cursorX, cursorY)
+        ctx.lineTo(cursorX, cursorY + 15)
+        ctx.lineTo(cursorX + 5, cursorY + 12)
+        ctx.lineTo(cursorX + 8, cursorY + 18)
+        ctx.lineTo(cursorX + 11, cursorY + 16)
+        ctx.lineTo(cursorX + 8, cursorY + 10)
+        ctx.lineTo(cursorX + 12, cursorY + 10)
+        ctx.closePath()
+        ctx.fill()
+      }
+      break
+    }
+
+    default:
+      // Default: show step text
+      ctx.fillStyle = '#f0f0f0'
+      ctx.fillRect(20, contentY + 100, width - 40, contentHeight - 150)
+      ctx.fillStyle = '#666'
+      ctx.font = '14px Arial'
+      ctx.textAlign = 'center'
+      ctx.fillText('执行操作中...', width / 2, contentY + 200)
+      ctx.textAlign = 'left'
   }
 
   // Draw status bar
@@ -1260,13 +1611,23 @@ function drawMockContent(ctx: CanvasRenderingContext2D, width: number, height: n
   ctx.fillText('就绪', 10, height - 15)
 }
 
-function drawActionHighlight(ctx: CanvasRenderingContext2D, width: number, _height: number, actionType: string, _target: string) {
+function drawActionHighlight(ctx: CanvasRenderingContext2D, width: number, _height: number, action: { type: string; selector?: string; x?: number; y?: number }) {
   const indicatorX = width - 30
   const indicatorY = 55
 
-  ctx.fillStyle = actionType === 'click' ? '#ff6b6b' :
-                  actionType === 'type' ? '#4ecdc4' :
-                  actionType === 'navigate' ? '#45b7d1' : '#96ceb4'
+  const colors: Record<string, string> = {
+    'click': '#ff4d4f',
+    'dblclick': '#ff4d4f',
+    'type': '#52c41a',
+    'keypress': '#722ed1',
+    'goto': '#1890ff',
+    'scroll': '#faad14',
+    'mousemove': '#8c8c8c',
+    'mousedown': '#ff4d4f',
+    'mouseup': '#52c41a'
+  }
+
+  ctx.fillStyle = colors[action.type] || '#8c8c8c'
   ctx.beginPath()
   ctx.arc(indicatorX, indicatorY, 8, 0, Math.PI * 2)
   ctx.fill()
@@ -1274,11 +1635,21 @@ function drawActionHighlight(ctx: CanvasRenderingContext2D, width: number, _heig
   ctx.fillStyle = '#333'
   ctx.font = '12px Arial'
   ctx.textAlign = 'right'
-  const actionLabel = actionType === 'click' ? '点击' :
-                      actionType === 'type' ? '输入' :
-                      actionType === 'navigate' ? '导航' :
-                      actionType === 'scroll' ? '滚动' : '执行'
-  ctx.fillText(actionLabel, indicatorX - 15, indicatorY + 4)
+
+  const labels: Record<string, string> = {
+    'click': '点击',
+    'dblclick': '双击',
+    'type': '输入',
+    'keypress': '按键',
+    'goto': '导航',
+    'scroll': '滚动',
+    'mousemove': '移动',
+    'mousedown': '按下',
+    'mouseup': '释放',
+    'other': '执行'
+  }
+
+  ctx.fillText(labels[action.type] || '执行', indicatorX - 15, indicatorY + 4)
   ctx.textAlign = 'left'
 }
 
@@ -1344,9 +1715,13 @@ function handleReplayClose() {
   }
   replayStatus.value = 'idle'
   replayStep.value = 0
+  selectedStep.value = null
   replayScript.value = ''
   replayCaseId.value = ''
   replaySteps.value = []
+  recordedScreenshots = []
+  recordedLineToAction = []
+  replayScreenshotImages = []
 }
 
 fetchData()
@@ -1414,6 +1789,9 @@ fetchFolderTree()
 .step-number { width: 24px; height: 24px; border-radius: 50%; background: #d9d9d9; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
 .replay-step-item.active .step-number { background: #1890ff; color: #fff; }
 .replay-step-item.completed .step-number { background: #52c41a; color: #fff; }
+.replay-step-item.clickable { cursor: pointer; }
+.replay-step-item.clickable:hover { background: #f5f7fa; }
+.replay-step-item.selected { background: #f0f5ff; border-left: 3px solid #1890ff; }
 .step-content { flex: 1; font-size: 13px; word-break: break-all; }
 .replay-preview { flex: 1; display: flex; flex-direction: column; }
 .replay-preview-header { padding: 12px 16px; font-weight: 600; border-bottom: 1px solid #e0e0e0; background: #fafafa; }

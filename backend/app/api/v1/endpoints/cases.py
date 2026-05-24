@@ -389,10 +389,24 @@ async def update_case(case_id: str, body: CaseUpdate, db: AsyncSession = Depends
     case = result.scalar_one_or_none()
     if not case:
         raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
-    for k, v in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    for k, v in data.items():
         setattr(case, k, v)
     case.version += 1
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # Rollback and retry without ui_screenshots if column doesn't exist yet
+        await db.rollback()
+        data.pop("ui_screenshots", None)
+        result = await db.execute(select(TestCase).where(TestCase.id == case_id, TestCase.deleted_at.is_(None)))
+        case = result.scalar_one_or_none()
+        if not case:
+            raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
+        for k, v in data.items():
+            setattr(case, k, v)
+        case.version += 1
+        await db.commit()
     return ResponseModel(message="更新成功")
 
 
@@ -478,4 +492,9 @@ async def stop_recording(
     result = await recording_manager.remove_session(body.session_id)
     if result is None:
         raise HTTPException(status_code=404, detail={"code": "SESSION_NOT_FOUND", "message": "录制会话不存在"})
-    return ResponseModel(data={"script": result["script"], "url": result["url"]})
+    return ResponseModel(data={
+        "script": result["script"],
+        "url": result["url"],
+        "screenshots": result.get("screenshots", []),
+        "line_to_action": result.get("line_to_action", []),
+    })
