@@ -119,7 +119,7 @@
                 </div>
               </template>
             </el-table-column>
-            <el-table-column prop="type" label="类型" width="100"><template #default="{row}"><el-tag size="small">{{ row.type }}</el-tag></template></el-table-column>
+            <el-table-column prop="type" label="类型" width="100"><template #default="{row}"><el-tag size="small">{{ typeLabelMap[row.type] || row.type }}</el-tag></template></el-table-column>
             <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='BVT'?'danger':row.priority==='P0'?'danger':row.priority==='P1'?'warning':''" size="small">{{ row.priority }}</el-tag></template></el-table-column>
             <el-table-column prop="author" label="编写人" width="100" show-overflow-tooltip />
             <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='ACTIVE'?'success':row.status==='DEPRECATED'?'info':''" size="small">{{ row.status }}</el-tag></template></el-table-column>
@@ -177,6 +177,7 @@
             <el-form-item label="并发用户数"><el-input-number v-model="form.perf_vusers" :min="1" :max="10000" /></el-form-item>
             <el-form-item label="每秒启动用户"><el-input-number v-model="form.perf_spawn_rate" :min="1" :max="1000" /></el-form-item>
             <el-form-item label="持续时间(秒)"><el-input-number v-model="form.perf_duration" :min="1" :max="36000" /></el-form-item>
+            <el-form-item label="性能脚本"><el-input v-model="form.perf_script" type="textarea" :rows="12" placeholder="Locust 性能测试脚本" /></el-form-item>
           </el-tab-pane>
         </el-tabs>
       </el-form>
@@ -205,6 +206,17 @@
           <el-icon :size="48"><VideoCamera /></el-icon>
           <p>输入目标地址并点击"开始录制"</p>
         </div>
+        <!-- Assert context menu -->
+        <div v-if="assertContextMenu.visible" class="assert-context-menu"
+          :style="{ left: assertContextMenu.x + 'px', top: assertContextMenu.y + 'px' }"
+          @click.stop>
+          <div class="assert-menu-title">添加断言</div>
+          <div class="assert-menu-item" @click="handleAssertSelect('text')">断言文本内容</div>
+          <div class="assert-menu-item" @click="handleAssertSelect('visible')">断言元素可见</div>
+          <div class="assert-menu-item" @click="handleAssertSelect('value')">断言输入框值</div>
+          <div class="assert-menu-item" @click="handleAssertSelect('url')">断言URL</div>
+          <div class="assert-menu-item" @click="handleAssertSelect('color')">断言颜色</div>
+        </div>
       </div>
       <div class="record-footer">
         <el-select v-model="recordBindCaseId" placeholder="选择要绑定的用例" filterable style="flex:1">
@@ -213,6 +225,22 @@
         <el-button type="primary" :disabled="!recordBindCaseId || !recordedScript.trim()" @click="bindRecordedScript">绑定到用例</el-button>
       </div>
       <el-input v-if="recordedScript" v-model="recordedScript" type="textarea" :rows="6" placeholder="录制脚本预览" readonly style="margin-top:12px" />
+    </el-dialog>
+
+    <!-- Assert Dialog -->
+    <el-dialog v-model="assertDialogVisible" title="配置断言" width="420px" draggable destroy-on-close>
+      <el-form label-width="80px">
+        <el-form-item label="断言类型">
+          <el-tag>{{ assertTypeLabel }}</el-tag>
+        </el-form-item>
+        <el-form-item label="期望值" required>
+          <el-input v-model="assertForm.expectedValue" :placeholder="assertPlaceholder" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="assertDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="confirmAssert">确认</el-button>
+      </template>
     </el-dialog>
 
     <!-- Batch Execute Dialog -->
@@ -298,7 +326,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import {
@@ -374,6 +402,26 @@ let replayAbortController: AbortController | null = null
 let recordedScreenshots: string[] = []
 let recordedLineToAction: (number | null)[] = []
 
+// Assertion recording state
+const assertContextMenu = ref({ visible: false, x: 0, y: 0, canvasX: 0, canvasY: 0 })
+const assertDialogVisible = ref(false)
+const assertForm = reactive({ type: '', expectedValue: '' })
+
+const typeLabelMap: Record<string, string> = { API: 'API', UI: 'UI', PERFORMANCE: '性能' }
+
+const DEFAULT_LOCUST_SCRIPT = `from locust import HttpUser, task, between
+
+class MyUser(HttpUser):
+    wait_time = between(1, 3)
+
+    @task
+    def test_case(self):
+        # TODO: 在此处补充业务逻辑
+        # 示例: self.client.get("/api/v1/xxx")
+        # 示例: self.client.post("/api/v1/xxx", json={"key": "value"})
+        pass
+`
+
 const defaultForm = () => ({
   folder_id: selectedFolderId.value || '',
   name: '',
@@ -390,7 +438,7 @@ const defaultForm = () => ({
   api_url: '', api_method: 'GET', api_headers: null as Record<string, string> | null,
   api_body_type: 'JSON', api_body: '', api_timeout: 30000, api_assertions: [] as any[],
   ui_url: '', ui_script: '', ui_script_type: 'MANUAL',
-  perf_url: '', perf_vusers: 10, perf_spawn_rate: 1, perf_duration: 60, perf_assertions: [] as any[],
+  perf_url: '', perf_vusers: 10, perf_spawn_rate: 1, perf_duration: 60, perf_assertions: [] as any[], perf_script: DEFAULT_LOCUST_SCRIPT,
 })
 
 const form = reactive(defaultForm())
@@ -409,6 +457,16 @@ const rules: FormRules = {
 function onTypeChange() {
   activeTab.value = form.type === 'API' ? 'api' : form.type === 'UI' ? 'ui' : form.type === 'PERFORMANCE' ? 'perf' : 'basic'
 }
+
+watch(() => form.type, (newType) => {
+  if (newType === 'PERFORMANCE') {
+    nextTick(() => {
+      if (!form.perf_script || !form.perf_script.trim()) {
+        form.perf_script = DEFAULT_LOCUST_SCRIPT
+      }
+    })
+  }
+})
 
 function resetForm() {
   Object.assign(form, defaultForm())
@@ -443,7 +501,11 @@ async function handleEdit(row: any) {
       ui_url: data.ui_url || '', ui_script: (data.ui_script || '').replace(/^'|'$/g, ''), ui_script_type: data.ui_script_type || 'MANUAL',
       perf_url: data.perf_url || '', perf_vusers: data.perf_vusers || 10,
       perf_spawn_rate: data.perf_spawn_rate || 1, perf_duration: data.perf_duration || 60,
+      perf_script: data.perf_script || '',
     })
+    if (form.type === 'PERFORMANCE' && (!form.perf_script || !form.perf_script.trim())) {
+      form.perf_script = DEFAULT_LOCUST_SCRIPT
+    }
     dialogVisible.value = true
   } catch {}
 }
@@ -472,6 +534,7 @@ async function handleSubmit() {
     } else if (form.type === 'PERFORMANCE') {
       payload.perf_url = form.perf_url || undefined; payload.perf_vusers = form.perf_vusers || undefined
       payload.perf_spawn_rate = form.perf_spawn_rate || undefined; payload.perf_duration = form.perf_duration || undefined
+      payload.perf_script = form.perf_script || undefined
     }
     if (isEdit.value) {
       await updateCase(editingId.value, payload)
@@ -841,6 +904,22 @@ function bindRecordCanvasEvents(canvas: HTMLCanvasElement) {
   document.addEventListener('mouseup', onMouseUp)
   canvas.addEventListener('wheel', onWheel, { passive: false })
   document.addEventListener('keydown', onKeyDown, true)
+
+  const onContextMenu = (e: MouseEvent) => {
+    if (recordStatus.value !== 'recording') return
+    e.preventDefault()
+    const { x, y } = mapRecordCoords(canvas, e.clientX, e.clientY)
+    const rect = canvas.getBoundingClientRect()
+    assertContextMenu.value = {
+      visible: true,
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+      canvasX: x,
+      canvasY: y,
+    }
+  }
+  canvas.addEventListener('contextmenu', onContextMenu)
+
   recordEventCleanups.push(() => {
     canvas.removeEventListener('click', onClick)
     canvas.removeEventListener('dblclick', onDblClick)
@@ -849,7 +928,60 @@ function bindRecordCanvasEvents(canvas: HTMLCanvasElement) {
     document.removeEventListener('mouseup', onMouseUp)
     canvas.removeEventListener('wheel', onWheel)
     document.removeEventListener('keydown', onKeyDown, true)
+    canvas.removeEventListener('contextmenu', onContextMenu)
   })
+}
+
+// Close assert context menu when clicking outside
+function closeAssertMenu() {
+  assertContextMenu.value.visible = false
+}
+document.addEventListener('click', closeAssertMenu)
+
+const assertTypeLabel = computed(() => {
+  const map: Record<string, string> = { text: '文本内容', visible: '元素可见', value: '输入框值', url: 'URL', color: '颜色' }
+  return map[assertForm.type] || ''
+})
+
+const assertPlaceholder = computed(() => {
+  const map: Record<string, string> = {
+    text: '请输入期望的文本内容',
+    value: '请输入期望的输入框值',
+    url: '请输入期望的URL地址',
+    color: '请输入期望的颜色值，如 rgb(255, 0, 0)',
+  }
+  return map[assertForm.type] || ''
+})
+
+function handleAssertSelect(type: string) {
+  assertContextMenu.value.visible = false
+  if (type === 'visible') {
+    sendAssertion('visible')
+    return
+  }
+  assertForm.type = type
+  assertForm.expectedValue = ''
+  assertDialogVisible.value = true
+}
+
+function confirmAssert() {
+  if (!assertForm.expectedValue.trim()) {
+    ElMessage.warning('请输入期望值')
+    return
+  }
+  assertDialogVisible.value = false
+  sendAssertion(assertForm.type, assertForm.expectedValue.trim())
+}
+
+function sendAssertion(assertType: string, expectedValue?: string) {
+  const payload: any = { type: 'assert', assertType }
+  if (expectedValue) payload.expectedValue = expectedValue
+  if (assertType !== 'url') {
+    payload.x = assertContextMenu.value.canvasX
+    payload.y = assertContextMenu.value.canvasY
+  }
+  sendRecordEvent(payload)
+  ElMessage.success(`已添加${assertTypeLabel.value || assertType}断言`)
 }
 
 async function handleRecordStart() {
@@ -1775,6 +1907,12 @@ fetchFolderTree()
 .record-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--el-color-danger); animation: pulse 1s infinite; }
 .frame-counter { font-size: 12px; color: var(--el-text-color-secondary); font-weight: 400; }
 @keyframes pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
+
+/* Assert context menu */
+.assert-context-menu { position: absolute; z-index: 100; background: #fff; border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); min-width: 150px; padding: 4px 0; }
+.assert-menu-title { padding: 8px 16px; font-size: 12px; color: #999; border-bottom: 1px solid #eee; }
+.assert-menu-item { padding: 8px 16px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.assert-menu-item:hover { background: #f0f5ff; color: #1890ff; }
 
 /* Replay styles */
 .replay-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }

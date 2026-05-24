@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 
 from app.core.config import settings
 from app.core.database import get_engine, Base, get_session_factory
@@ -81,6 +81,8 @@ async def lifespan(app: FastAPI):
     eng = get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add missing columns for existing tables (create_all only creates tables, not alter)
+        await conn.execute(text("ALTER TABLE IF EXISTS test_cases ADD COLUMN IF NOT EXISTS perf_script TEXT"))
     await seed_default_admin()
     await ensure_default_folder()
     await cleanup_empty_text_fields()

@@ -69,6 +69,7 @@ class CaseCreate(BaseModel):
     perf_spawn_rate: Optional[int] = None
     perf_duration: Optional[int] = None
     perf_assertions: Optional[List[dict]] = None
+    perf_script: Optional[str] = None
 
 
 class CaseUpdate(BaseModel):
@@ -108,6 +109,7 @@ class CaseUpdate(BaseModel):
     perf_spawn_rate: Optional[int] = None
     perf_duration: Optional[int] = None
     perf_assertions: Optional[List[dict]] = None
+    perf_script: Optional[str] = None
 
 
 class CaseItem(ItemBase):
@@ -148,3 +150,4 @@ class CaseItem(ItemBase):
     perf_spawn_rate: Optional[int] = None
     perf_duration: Optional[int] = None
     perf_assertions: Optional[List[dict]] = None
+    perf_script: Optional[str] = None

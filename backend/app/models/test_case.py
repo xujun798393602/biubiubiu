@@ -67,6 +67,7 @@ class TestCase(BaseModel):
     perf_spawn_rate: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="每秒启动用户数")
     perf_duration: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="持续时间(秒)")
     perf_assertions: Mapped[list] = mapped_column(JSONB, nullable=False, server_default=text("'[]'::jsonb"), comment="性能断言规则")
+    perf_script: Mapped[str | None] = mapped_column(Text, nullable=True, comment="性能测试脚本")
 
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, comment="版本号")
 

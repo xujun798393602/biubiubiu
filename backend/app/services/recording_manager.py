@@ -114,6 +114,50 @@ class RecordingSession:
         except Exception:
             return ""
 
+    async def get_element_info_at(self, x: int, y: int) -> dict:
+        """Get detailed element info at coordinates for assertions."""
+        try:
+            return await self.page.evaluate(
+                """(coords) => {
+                    const el = document.elementFromPoint(coords.x, coords.y);
+                    if (!el) return { selector: '', text: '', value: '', visible: false, color: '' };
+
+                    // Build selector
+                    let selector = '';
+                    if (el.id) {
+                        selector = '#' + CSS.escape(el.id);
+                    } else {
+                        const path = [];
+                        let cur = el;
+                        while (cur && cur.nodeType === Node.ELEMENT_NODE) {
+                            let sel = cur.tagName.toLowerCase();
+                            if (cur.id) { path.unshift('#' + CSS.escape(cur.id)); break; }
+                            const parent = cur.parentElement;
+                            if (parent) {
+                                const siblings = Array.from(parent.children).filter(c => c.tagName === cur.tagName);
+                                if (siblings.length > 1) {
+                                    sel += ':nth-of-type(' + (siblings.indexOf(cur) + 1) + ')';
+                                }
+                            }
+                            path.unshift(sel);
+                            cur = cur.parentElement;
+                        }
+                        selector = path.join(' > ');
+                    }
+
+                    const text = (el.innerText || el.textContent || '').trim().substring(0, 500);
+                    const value = (el.value || '').substring(0, 500);
+                    const style = window.getComputedStyle(el);
+                    const visible = style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+                    const color = style.color || '';
+
+                    return { selector, text, value, visible, color };
+                }""",
+                {"x": x, "y": y},
+            )
+        except Exception:
+            return {"selector": "", "text": "", "value": "", "visible": False, "color": ""}
+
     async def handle_event(self, event: dict):
         event_type = event.get("type")
         try:
@@ -169,6 +213,29 @@ class RecordingSession:
                 url = event["url"]
                 await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 self.actions.append({"type": "goto", "url": url})
+                await self._capture_action_screenshot()
+            elif event_type == "assert":
+                assert_type = event["assertType"]
+                x, y = event.get("x"), event.get("y")
+                expected = event.get("expectedValue", "")
+
+                if assert_type == "url":
+                    actual_url = self.page.url
+                    self.actions.append({
+                        "type": "assert", "assertType": "url",
+                        "expectedValue": expected, "actualValue": actual_url,
+                    })
+                else:
+                    info = await self.get_element_info_at(x, y)
+                    actual = info.get("text") or info.get("value") or info.get("color") or ""
+                    self.actions.append({
+                        "type": "assert", "assertType": assert_type,
+                        "selector": info.get("selector", ""),
+                        "expectedValue": expected, "actualValue": actual,
+                        "elementText": info.get("text", ""),
+                        "visible": info.get("visible", False),
+                        "color": info.get("color", ""),
+                    })
                 await self._capture_action_screenshot()
         except Exception as e:
             import logging
@@ -239,6 +306,32 @@ class RecordingSession:
                     f'    page.mouse.wheel({action["deltaX"]}, {action["deltaY"]})'
                 )
                 line_to_action.append(action_idx)
+            elif atype == "assert":
+                assert_type = action["assertType"]
+                sel = action.get("selector", "")
+                expected = action.get("expectedValue", "").replace('"', '\\"')
+                if assert_type == "text":
+                    lines.append(f'    expect(page.locator("{sel}")).to_have_text("{expected}")')
+                    line_to_action.append(action_idx)
+                elif assert_type == "visible":
+                    lines.append(f'    expect(page.locator("{sel}")).to_be_visible()')
+                    line_to_action.append(action_idx)
+                elif assert_type == "value":
+                    lines.append(f'    expect(page.locator("{sel}")).to_have_value("{expected}")')
+                    line_to_action.append(action_idx)
+                elif assert_type == "url":
+                    lines.append(f'    expect(page).to_have_url("{expected}")')
+                    line_to_action.append(action_idx)
+                elif assert_type == "color":
+                    lines.append(f'    expect(page.locator("{sel}")).to_have_css("color", "{expected}")')
+                    line_to_action.append(action_idx)
+
+        # Add expect import if there are assertions
+        has_assertions = any(a["type"] == "assert" for a in self.actions)
+        if has_assertions:
+            lines.insert(1, "from playwright.sync_api import expect")
+            line_to_action.insert(1, None)
+
         footer_lines = [
             "    browser.close()",
             "",
