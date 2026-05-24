@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
         # Add missing columns for existing tables (create_all only creates tables, not alter)
         await conn.execute(text("ALTER TABLE IF EXISTS test_cases ADD COLUMN IF NOT EXISTS perf_script TEXT"))
+        await conn.execute(text("ALTER TABLE IF EXISTS tasks ADD COLUMN IF NOT EXISTS skipped_count INTEGER NOT NULL DEFAULT 0"))
     await seed_default_admin()
     await ensure_default_folder()
     await cleanup_empty_text_fields()

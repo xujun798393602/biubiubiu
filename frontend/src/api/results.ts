@@ -4,7 +4,9 @@ export interface ResultOverview {
   totalCases: number
   successCount: number
   failedCount: number
+  skippedCount: number
   successRate: number
+  duration: number
 }
 
 export interface ResultItem {
@@ -17,6 +19,17 @@ export interface ResultItem {
   duration: number
   startedAt: string | null
   finishedAt: string | null
+}
+
+export interface ResultDetail {
+  id: string
+  task_id: string
+  case_id: string
+  case_name: string
+  case_type: string
+  status: string
+  detail: any
+  duration_ms: number
 }
 
 export type ResultStatus = 'SUCCESS' | 'FAILED' | 'SKIPPED'

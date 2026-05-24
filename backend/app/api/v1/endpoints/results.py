@@ -36,13 +36,15 @@ async def get_result_overview(
     failed = sum(1 for r in results if r.status == "FAILED")
     skipped = sum(1 for r in results if r.status == "SKIPPED")
     total_duration = sum(r.duration_ms for r in results)
+    executed = success + failed  # 实际执行的用例数（排除跳过）
+    success_rate = round(success / executed * 100, 1) if executed else 0
 
     return ResponseModel(data={
         "totalCases": total,
         "successCount": success,
         "failedCount": failed,
         "skippedCount": skipped,
-        "successRate": round(success / total, 2) if total else 0,
+        "successRate": success_rate,
         "duration": total_duration,
     })
 

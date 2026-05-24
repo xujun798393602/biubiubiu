@@ -1,5 +1,6 @@
 """Task management endpoints."""
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -141,6 +142,11 @@ async def start_task(task_id: str, db: AsyncSession = Depends(get_db), current_u
     task.status = "RUNNING"
     task.started_at = datetime.now(timezone.utc)
     await db.commit()
+
+    # Dispatch execution in background
+    from app.services.task_executor import task_executor
+    asyncio.create_task(task_executor.execute(str(task.id)))
+
     return ResponseModel(message="任务已启动")
 
 

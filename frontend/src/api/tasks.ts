@@ -9,6 +9,7 @@ export interface TaskItem {
   total_cases: number
   success_count: number
   failed_count: number
+  skipped_count: number
 }
 
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELLED'
