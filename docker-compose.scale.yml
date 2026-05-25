@@ -1,0 +1,95 @@
+# Docker Compose extension for scaling worker nodes
+# Usage: docker compose -f docker-compose.yml -f docker-compose.scale.yml up -d
+
+services:
+  # Playwright Worker - for UI test execution
+  worker-playwright:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: auto-test-worker-playwright-${WORKER_INDEX:-1}
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+      NODE_TYPE: PLAYWRIGHT
+      NODE_NAME: playwright-worker-${WORKER_INDEX:-1}
+      API_KEY: ${WORKER_API_KEY:-}
+      MAX_CONCURRENT: ${PLAYWRIGHT_MAX_CONCURRENT:-3}
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-10}
+      DISPLAY: ":99"
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - auto-test-net
+    deploy:
+      resources:
+        limits:
+          cpus: '${PLAYWRIGHT_CPU_LIMIT:-2}'
+          memory: '${PLAYWRIGHT_MEMORY_LIMIT:-4G}'
+    volumes:
+      - /opt/auto-test/logs/workers:/var/log/workers:z
+
+  # Locust Worker - for performance test execution
+  worker-locust:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: auto-test-worker-locust-${WORKER_INDEX:-1}
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+      NODE_TYPE: LOCUST
+      NODE_NAME: locust-worker-${WORKER_INDEX:-1}
+      API_KEY: ${WORKER_API_KEY:-}
+      MAX_CONCURRENT: ${LOCUST_MAX_CONCURRENT:-5}
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-10}
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - auto-test-net
+    deploy:
+      resources:
+        limits:
+          cpus: '${LOCUST_CPU_LIMIT:-4}'
+          memory: '${LOCUST_MEMORY_LIMIT:-8G}'
+    volumes:
+      - /opt/auto-test/logs/workers:/var/log/workers:z
+
+  # Mixed Worker - supports both UI and performance tests
+  worker-mixed:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: auto-test-worker-mixed-${WORKER_INDEX:-1}
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+      NODE_TYPE: MIXED
+      NODE_NAME: mixed-worker-${WORKER_INDEX:-1}
+      API_KEY: ${WORKER_API_KEY:-}
+      MAX_CONCURRENT: ${MIXED_MAX_CONCURRENT:-5}
+      HEARTBEAT_INTERVAL: ${HEARTBEAT_INTERVAL:-10}
+      DISPLAY: ":99"
+    depends_on:
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    networks:
+      - auto-test-net
+    deploy:
+      resources:
+        limits:
+          cpus: '${MIXED_CPU_LIMIT:-4}'
+          memory: '${MIXED_MEMORY_LIMIT:-8G}'
+    volumes:
+      - /opt/auto-test/logs/workers:/var/log/workers:z

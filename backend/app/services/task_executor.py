@@ -1,4 +1,4 @@
-"""Task execution engine — runs test cases in the background."""
+"""Test execution engine - runs test cases in the background."""
 
 import asyncio
 import logging
@@ -17,6 +17,8 @@ from app.models.task import Task, TaskLog
 from app.models.test_case import TaskCase, TestCase
 from app.models.result import TestResult
 from app.models.enums import ResultStatus, TaskStatus
+from app.services.task_dispatcher import task_dispatcher
+from app.services.queue_manager import queue_manager
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ class TaskExecutor:
     """Executes tasks by running their associated test cases."""
 
     async def execute(self, task_id: str):
-        """Main entry point — runs in background via asyncio.create_task."""
+        """Main entry point - runs in background via asyncio.create_task."""
         session_factory = get_session_factory()
         async with session_factory() as db:
             try:
@@ -62,14 +64,54 @@ class TaskExecutor:
                     start_time = time.monotonic()
 
                     try:
-                        if case.type == "API":
-                            exec_result = await self._execute_api_case(case)
-                        elif case.type == "UI":
-                            exec_result = await self._execute_ui_case(case)
-                        elif case.type == "PERFORMANCE":
-                            exec_result = await self._execute_perf_case(case)
+                        # Try to dispatch to remote node first
+                        dispatch_result = await task_dispatcher.dispatch_task(
+                            db=db,
+                            task_id=task_id,
+                            case=case,
+                            priority=task.priority if hasattr(task, 'priority') else 0,
+                        )
+
+                        if dispatch_result["dispatched"]:
+                            # Task dispatched to remote node, wait for result
+                            await self._add_log(
+                                db, task_id, "INFO",
+                                f"用例已分发到节点 {dispatch_result['node_name']}"
+                            )
+
+                            # Wait for result from worker
+                            remote_result = await task_dispatcher.wait_for_result(
+                                task_id=task_id,
+                                case_id=str(case.id),
+                                timeout=self._get_case_timeout(case),
+                            )
+
+                            if remote_result:
+                                exec_result = {
+                                    "status": remote_result.get("status", ResultStatus.FAILED),
+                                    "detail": remote_result.get("detail", {}),
+                                }
+                                exec_result["detail"]["node_id"] = dispatch_result["node_id"]
+                                exec_result["detail"]["node_name"] = dispatch_result["node_name"]
+                                exec_result["detail"]["distributed"] = True
+                            else:
+                                # Timeout waiting for result
+                                exec_result = {
+                                    "status": ResultStatus.FAILED,
+                                    "detail": {
+                                        "error": f"等待节点 {dispatch_result['node_name']} 结果超时",
+                                        "node_id": dispatch_result["node_id"],
+                                        "distributed": True,
+                                    },
+                                }
                         else:
-                            exec_result = {"status": ResultStatus.SKIPPED, "detail": {"error": f"不支持的用例类型: {case.type}"}}
+                            # No available nodes, execute locally
+                            await self._add_log(
+                                db, task_id, "INFO",
+                                f"无可用节点，本地执行用例: {case.name}"
+                            )
+                            exec_result = await self._execute_locally(case)
+
                     except Exception as e:
                         logger.error(f"Case {case.id} execution error: {e}")
                         exec_result = {"status": ResultStatus.FAILED, "detail": {"error": str(e), "traceback": traceback.format_exc()}}
@@ -124,6 +166,27 @@ class TaskExecutor:
                     await self._add_log(db, task_id, "ERROR", f"任务执行异常: {str(e)}")
                 except Exception:
                     logger.error(f"Failed to update task {task_id} status after error")
+
+    async def _execute_locally(self, case: TestCase) -> dict:
+        """Execute a test case locally on the backend server."""
+        if case.type == "API":
+            return await self._execute_api_case(case)
+        elif case.type == "UI":
+            return await self._execute_ui_case(case)
+        elif case.type == "PERFORMANCE":
+            return await self._execute_perf_case(case)
+        else:
+            return {"status": ResultStatus.SKIPPED, "detail": {"error": f"不支持的用例类型: {case.type}"}}
+
+    def _get_case_timeout(self, case: TestCase) -> int:
+        """Get timeout for a case based on its type."""
+        if case.type == "PERFORMANCE":
+            duration = case.perf_duration or 60
+            return duration + 120  # Extra 2 minutes buffer
+        elif case.type == "UI":
+            return 300  # 5 minutes for UI tests
+        else:
+            return 120  # 2 minutes for API tests
 
     async def _execute_api_case(self, case: TestCase) -> dict:
         """Execute an API test case using httpx."""

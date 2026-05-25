@@ -8,7 +8,8 @@
       "Bash(scoop install *)",
       "Bash(choco install *)",
       "Bash(pip install *)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(chmod +x \"E:/shareDIR/TDD-auto-platform/scripts/run-migration.sh\")"
     ]
   }
 }
