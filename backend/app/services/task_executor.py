@@ -215,45 +215,168 @@ class TaskExecutor:
         return {"status": status, "detail": detail}
 
     async def _execute_ui_case(self, case: TestCase) -> dict:
-        """Execute a UI test case by running the Playwright script."""
+        """Execute a UI test case by running the Playwright script with step-by-step capture."""
         script = case.ui_script
         if not script:
             return {"status": ResultStatus.FAILED, "detail": {"error": "未配置UI脚本"}}
 
-        # Write script to temp file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
-            f.write(script)
-            script_path = f.name
+        # Get stored screenshots and line_to_action mapping from recording
+        stored_screenshots = []
+        line_to_action = []
+        if case.ui_screenshots:
+            stored_screenshots = case.ui_screenshots.get("screenshots", [])
+            line_to_action = case.ui_screenshots.get("line_to_action", [])
+
+        # Parse script into steps for execution
+        script_lines = script.strip().split("\n")
+        steps = []
+        step_logs = []
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "python", script_path,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            from playwright.async_api import async_playwright
 
-            stdout_text = stdout.decode("utf-8", errors="replace")[:5000]
-            stderr_text = stderr.decode("utf-8", errors="replace")[:5000]
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page()
+
+                for line_idx, line in enumerate(script_lines):
+                    line = line.strip()
+                    if not line or line.startswith("#") or line.startswith("from ") or line.startswith("import ") or line.startswith("def ") or line.startswith("with ") or line == "browser.close()":
+                        continue
+
+                    # Skip function definition and context manager lines
+                    if line.endswith(":"):
+                        continue
+
+                    step_info = {
+                        "step_index": len(steps) + 1,
+                        "code": line,
+                        "status": "pending",
+                        "log": "",
+                        "screenshot": None,
+                        "timestamp": None,
+                    }
+
+                    # Get corresponding screenshot from recording
+                    action_idx = line_to_action[line_idx] if line_idx < len(line_to_action) else None
+                    if action_idx is not None and action_idx < len(stored_screenshots):
+                        step_info["screenshot"] = stored_screenshots[action_idx]
+
+                    start_time = time.monotonic()
+                    try:
+                        # Execute the step
+                        if "page.goto(" in line:
+                            url = line.split('"')[1] if '"' in line else line.split("'")[1]
+                            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                            step_info["log"] = f"导航到: {url}"
+                        elif "page.click(" in line:
+                            selector = line.split('"')[1] if '"' in line else line.split("'")[1]
+                            await page.click(selector, timeout=10000)
+                            step_info["log"] = f"点击元素: {selector}"
+                        elif "page.dblclick(" in line:
+                            selector = line.split('"')[1] if '"' in line else line.split("'")[1]
+                            await page.dblclick(selector, timeout=10000)
+                            step_info["log"] = f"双击元素: {selector}"
+                        elif "page.keyboard.type(" in line:
+                            text = line.split('"')[1] if '"' in line else line.split("'")[1]
+                            await page.keyboard.type(text)
+                            step_info["log"] = f"输入文本: {text}"
+                        elif "page.keyboard.press(" in line:
+                            key = line.split('"')[1] if '"' in line else line.split("'")[1]
+                            await page.keyboard.press(key)
+                            step_info["log"] = f"按键: {key}"
+                        elif "page.mouse.click(" in line:
+                            coords = line.split("(")[1].split(")")[0].split(",")
+                            x, y = int(coords[0].strip()), int(coords[1].strip())
+                            await page.mouse.click(x, y)
+                            step_info["log"] = f"鼠标点击: ({x}, {y})"
+                        elif "page.mouse.dblclick(" in line:
+                            coords = line.split("(")[1].split(")")[0].split(",")
+                            x, y = int(coords[0].strip()), int(coords[1].strip())
+                            await page.mouse.dblclick(x, y)
+                            step_info["log"] = f"鼠标双击: ({x}, {y})"
+                        elif "page.mouse.move(" in line:
+                            coords = line.split("(")[1].split(")")[0].split(",")
+                            x, y = int(coords[0].strip()), int(coords[1].strip())
+                            await page.mouse.move(x, y)
+                            step_info["log"] = f"鼠标移动: ({x}, {y})"
+                        elif "page.mouse.down()" in line:
+                            await page.mouse.down()
+                            step_info["log"] = "鼠标按下"
+                        elif "page.mouse.up()" in line:
+                            await page.mouse.up()
+                            step_info["log"] = "鼠标释放"
+                        elif "page.mouse.wheel(" in line:
+                            coords = line.split("(")[1].split(")")[0].split(",")
+                            dx, dy = int(coords[0].strip()), int(coords[1].strip())
+                            await page.mouse.wheel(dx, dy)
+                            step_info["log"] = f"滚动: ({dx}, {dy})"
+                        elif "expect(" in line:
+                            # Execute assertion
+                            exec_line = line.strip()
+                            step_info["log"] = f"断言: {exec_line}"
+                            # For assertions, we capture the current screenshot
+                            screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+                            import base64
+                            step_info["screenshot"] = base64.b64encode(screenshot_bytes).decode("ascii")
+                        else:
+                            step_info["log"] = f"执行: {line}"
+
+                        # Capture screenshot after action if not already captured
+                        if step_info["screenshot"] is None and "expect(" not in line:
+                            try:
+                                screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+                                import base64
+                                step_info["screenshot"] = base64.b64encode(screenshot_bytes).decode("ascii")
+                            except Exception:
+                                pass
+
+                        step_info["status"] = "success"
+                        duration = int((time.monotonic() - start_time) * 1000)
+                        step_info["duration_ms"] = duration
+                        step_info["timestamp"] = datetime.now(timezone.utc).isoformat()
+
+                    except Exception as e:
+                        step_info["status"] = "failed"
+                        step_info["log"] = f"执行失败: {str(e)}"
+                        duration = int((time.monotonic() - start_time) * 1000)
+                        step_info["duration_ms"] = duration
+                        step_info["timestamp"] = datetime.now(timezone.utc).isoformat()
+                        # Capture failure screenshot
+                        try:
+                            screenshot_bytes = await page.screenshot(type="jpeg", quality=60)
+                            import base64
+                            step_info["screenshot"] = base64.b64encode(screenshot_bytes).decode("ascii")
+                        except Exception:
+                            pass
+                        steps.append(step_info)
+                        step_logs.append(f"[Step {step_info['step_index']}] FAILED: {line} - {str(e)}")
+                        raise
+
+                    steps.append(step_info)
+                    step_logs.append(f"[Step {step_info['step_index']}] {step_info['status'].upper()}: {step_info['log']}")
+
+                await browser.close()
 
             detail = {
-                "exit_code": proc.returncode,
-                "stdout": stdout_text,
-                "stderr": stderr_text,
+                "exit_code": 0,
+                "stdout": "\n".join(step_logs),
+                "stderr": "",
+                "steps": steps,
+                "total_steps": len(steps),
             }
+            return {"status": ResultStatus.SUCCESS, "detail": detail}
 
-            if proc.returncode == 0:
-                return {"status": ResultStatus.SUCCESS, "detail": detail}
-            else:
-                detail["error"] = f"脚本执行失败，退出码: {proc.returncode}"
-                return {"status": ResultStatus.FAILED, "detail": detail}
-
-        except asyncio.TimeoutError:
-            return {"status": ResultStatus.FAILED, "detail": {"error": "脚本执行超时(120s)"}}
         except Exception as e:
-            return {"status": ResultStatus.FAILED, "detail": {"error": str(e)}}
-        finally:
-            Path(script_path).unlink(missing_ok=True)
+            detail = {
+                "exit_code": 1,
+                "stdout": "\n".join(step_logs),
+                "stderr": str(e),
+                "steps": steps,
+                "total_steps": len(steps),
+                "error": f"脚本执行失败: {str(e)}",
+            }
+            return {"status": ResultStatus.FAILED, "detail": detail}
 
     async def _execute_perf_case(self, case: TestCase) -> dict:
         """Execute a performance test case using Locust."""

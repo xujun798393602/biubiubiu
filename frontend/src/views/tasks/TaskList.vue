@@ -119,10 +119,58 @@
               <div v-if="currentDetail.detail.exit_code !== undefined" class="detail-item">
                 <span class="detail-label">退出码:</span>
                 <el-tag :type="currentDetail.detail.exit_code === 0 ? 'success' : 'danger'" size="small">{{ currentDetail.detail.exit_code }}</el-tag>
+                <span v-if="currentDetail.detail.total_steps" class="step-count">共 {{ currentDetail.detail.total_steps }} 个步骤</span>
               </div>
+
+              <!-- 执行步骤时间轴 -->
+              <div v-if="currentDetail.detail.steps && currentDetail.detail.steps.length > 0" class="detail-item">
+                <span class="detail-label">执行步骤:</span>
+                <div class="steps-timeline">
+                  <el-timeline>
+                    <el-timeline-item
+                      v-for="step in currentDetail.detail.steps"
+                      :key="step.step_index"
+                      :type="step.status === 'success' ? 'success' : 'danger'"
+                      :timestamp="step.timestamp ? new Date(step.timestamp).toLocaleTimeString('zh-CN') : ''"
+                      placement="top"
+                    >
+                      <el-card class="step-card" shadow="hover">
+                        <div class="step-header">
+                          <span class="step-title">步骤 {{ step.step_index }}</span>
+                          <el-tag :type="step.status === 'success' ? 'success' : 'danger'" size="small">
+                            {{ step.status === 'success' ? '成功' : '失败' }}
+                          </el-tag>
+                          <span v-if="step.duration_ms" class="step-duration">{{ step.duration_ms }}ms</span>
+                        </div>
+                        <div class="step-code">
+                          <code>{{ step.code }}</code>
+                        </div>
+                        <div v-if="step.log" class="step-log">
+                          <el-icon><Document /></el-icon>
+                          <span>{{ step.log }}</span>
+                        </div>
+                        <div v-if="step.screenshot" class="step-screenshot">
+                          <el-image
+                            :src="'data:image/jpeg;base64,' + step.screenshot"
+                            :preview-src-list="['data:image/jpeg;base64,' + step.screenshot]"
+                            fit="contain"
+                            preview-teleported
+                          >
+                            <template #error>
+                              <div class="image-error">截图加载失败</div>
+                            </template>
+                          </el-image>
+                        </div>
+                      </el-card>
+                    </el-timeline-item>
+                  </el-timeline>
+                </div>
+              </div>
+
+              <!-- 完整日志 -->
               <div v-if="currentDetail.detail.stdout" class="detail-item">
-                <span class="detail-label">标准输出:</span>
-                <el-input type="textarea" :model-value="currentDetail.detail.stdout" :rows="4" readonly />
+                <span class="detail-label">执行日志:</span>
+                <el-input type="textarea" :model-value="currentDetail.detail.stdout" :rows="6" readonly />
               </div>
               <div v-if="currentDetail.detail.stderr" class="detail-item">
                 <span class="detail-label">错误输出:</span>
@@ -148,6 +196,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Document } from '@element-plus/icons-vue'
 import { getTaskList, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail } from '@/api/results'
@@ -263,4 +312,23 @@ onMounted(fetchData)
 .error-output :deep(textarea) { color:#f56c6c; }
 .error-message { padding:8px 12px; background:#fef0f0; border-radius:4px; border-left:3px solid #f56c6c; }
 .error-text { color:#f56c6c; }
+
+/* 步骤时间轴样式 */
+.step-count { margin-left:12px; color:#909399; font-size:13px; }
+.steps-timeline { margin-top:12px; max-height:500px; overflow-y:auto; padding-right:8px; }
+.steps-timeline::-webkit-scrollbar { width:6px; }
+.steps-timeline::-webkit-scrollbar-thumb { background:#dcdfe6; border-radius:3px; }
+.steps-timeline::-webkit-scrollbar-thumb:hover { background:#c0c4cc; }
+.step-card { margin-bottom:0; }
+.step-card :deep(.el-card__body) { padding:12px; }
+.step-header { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.step-title { font-weight:600; color:#303133; }
+.step-duration { margin-left:auto; color:#909399; font-size:12px; }
+.step-code { background:#f5f7fa; padding:8px 12px; border-radius:4px; margin-bottom:8px; overflow-x:auto; }
+.step-code code { font-family:'Courier New', Courier, monospace; font-size:13px; color:#476582; word-break:break-all; }
+.step-log { display:flex; align-items:center; gap:6px; color:#606266; font-size:13px; margin-bottom:8px; padding:6px 10px; background:#f0f9eb; border-radius:4px; border-left:3px solid #67c23a; }
+.step-log .el-icon { color:#67c23a; flex-shrink:0; }
+.step-screenshot { border:1px solid #ebeef5; border-radius:6px; overflow:hidden; }
+.step-screenshot .el-image { width:100%; max-height:300px; display:block; }
+.step-screenshot .image-error { padding:20px; text-align:center; color:#c0c4cc; }
 </style>
