@@ -1,0 +1,62 @@
+# Worker 节点部署配置
+# 使用方法：
+#   1. 复制 .env.worker.example 为 .env.worker
+#   2. 修改 .env.worker 中的配置
+#   3. 执行: docker compose -f docker-compose.worker.yml up -d
+
+services:
+  # Locust 性能测试 Worker
+  locust-worker-1:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.locust
+    container_name: locust-worker-1
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+      NODE_TYPE: LOCUST
+      NODE_NAME: locust-worker-1
+      API_KEY: ${LOCUST_WORKER_API_KEY:-}
+      MAX_CONCURRENT: ${LOCUST_MAX_CONCURRENT:-5}
+      HEARTBEAT_INTERVAL: 10
+    networks:
+      - auto-test-net
+    volumes:
+      - /opt/auto-test/logs/workers:/var/log/workers:z
+    deploy:
+      resources:
+        limits:
+          cpus: '${LOCUST_CPU_LIMIT:-4}'
+          memory: '${LOCUST_MEMORY_LIMIT:-8G}'
+
+  # Playwright UI测试 Worker
+  playwright-worker-1:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.playwright
+    container_name: playwright-worker-1
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8000
+      REDIS_URL: redis://redis:6379/0
+      NODE_TYPE: PLAYWRIGHT
+      NODE_NAME: playwright-worker-1
+      API_KEY: ${PLAYWRIGHT_WORKER_API_KEY:-}
+      MAX_CONCURRENT: ${PLAYWRIGHT_MAX_CONCURRENT:-3}
+      HEARTBEAT_INTERVAL: 10
+      DISPLAY: ":99"
+    networks:
+      - auto-test-net
+    volumes:
+      - /opt/auto-test/logs/workers:/var/log/workers:z
+    deploy:
+      resources:
+        limits:
+          cpus: '${PLAYWRIGHT_CPU_LIMIT:-2}'
+          memory: '${PLAYWRIGHT_MEMORY_LIMIT:-4G}'
+
+networks:
+  auto-test-net:
+    external: true
+    name: tdd-auto-platform_auto-test-net

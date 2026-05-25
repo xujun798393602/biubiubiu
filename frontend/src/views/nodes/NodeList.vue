@@ -2,61 +2,69 @@
   <div class="node-list">
     <!-- Stats Cards -->
     <el-row :gutter="16" class="stats-row">
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="stat-value">{{ stats.online_nodes }}</div>
             <div class="stat-label">在线节点</div>
           </div>
-          <el-icon class="stat-icon" color="#67c23a"><CircleCheck /></el-icon>
+          <div class="stat-icon-wrapper">
+            <el-icon class="stat-icon" color="#67c23a"><CircleCheck /></el-icon>
+          </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="stat-value">{{ stats.by_type?.PLAYWRIGHT || 0 }}</div>
-            <div class="stat-label">Playwright 节点</div>
+            <div class="stat-label">Playwright</div>
           </div>
-          <el-icon class="stat-icon" color="#409eff"><Monitor /></el-icon>
+          <div class="stat-icon-wrapper">
+            <el-icon class="stat-icon" color="#409eff"><Monitor /></el-icon>
+          </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="stat-value">{{ stats.by_type?.LOCUST || 0 }}</div>
-            <div class="stat-label">Locust 节点</div>
+            <div class="stat-label">Locust</div>
           </div>
-          <el-icon class="stat-icon" color="#e6a23c"><DataLine /></el-icon>
+          <div class="stat-icon-wrapper">
+            <el-icon class="stat-icon" color="#e6a23c"><DataLine /></el-icon>
+          </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="12" :sm="12" :md="6">
         <el-card shadow="hover" class="stat-card">
           <div class="stat-content">
             <div class="stat-value">{{ stats.total_tasks_running }}</div>
-            <div class="stat-label">运行中任务</div>
+            <div class="stat-label">运行任务</div>
           </div>
-          <el-icon class="stat-icon" color="#909399"><Operation /></el-icon>
+          <div class="stat-icon-wrapper">
+            <el-icon class="stat-icon" color="#909399"><Operation /></el-icon>
+          </div>
         </el-card>
       </el-col>
     </el-row>
 
     <!-- Main Card -->
-    <el-card>
+    <el-card class="main-card">
       <template #header>
         <div class="card-header">
-          <span>节点管理</span>
+          <span class="card-title">节点管理</span>
           <div class="header-actions">
-            <el-button-group>
-              <el-button type="primary" @click="handleScalePlaywright">
+            <el-button-group class="scale-buttons">
+              <el-button type="primary" @click="handleScalePlaywright" size="small">
                 <el-icon><Plus /></el-icon>
                 Playwright +1
               </el-button>
-              <el-button type="warning" @click="handleScaleLocust">
+              <el-button type="warning" @click="handleScaleLocust" size="small">
                 <el-icon><Plus /></el-icon>
                 Locust +1
               </el-button>
             </el-button-group>
-            <el-button type="success" icon="Plus" @click="handleCreate">添加节点</el-button>
+            <el-button type="success" icon="Plus" @click="handleCreate" size="small">添加节点</el-button>
           </div>
         </div>
       </template>
@@ -634,6 +642,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.node-list {
+  padding: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .stats-row {
   margin-bottom: 16px;
 }
@@ -641,6 +655,7 @@ onUnmounted(() => {
 .stat-card {
   display: flex;
   align-items: center;
+  height: 100%;
 }
 
 .stat-card :deep(.el-card__body) {
@@ -648,46 +663,81 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 20px;
+  padding: 16px 20px;
+  box-sizing: border-box;
 }
 
 .stat-content {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  flex: 1;
 }
 
 .stat-value {
-  font-size: 28px;
+  font-size: 24px;
   font-weight: bold;
   color: #303133;
+  line-height: 1.2;
 }
 
 .stat-label {
-  font-size: 14px;
+  font-size: 13px;
   color: #909399;
   margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stat-icon-wrapper {
+  flex-shrink: 0;
+  margin-left: 12px;
 }
 
 .stat-icon {
-  font-size: 48px;
+  font-size: 40px;
   opacity: 0.8;
+}
+
+.main-card {
+  width: 100%;
+}
+
+.main-card :deep(.el-card__header) {
+  padding: 16px 20px;
 }
 
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scale-buttons {
+  display: flex;
 }
 
 .filter-bar {
   display: flex;
   gap: 12px;
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .pagination {
@@ -747,5 +797,50 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .node-list {
+    padding: 12px;
+  }
+
+  .stat-card :deep(.el-card__body) {
+    padding: 12px 16px;
+  }
+
+  .stat-value {
+    font-size: 20px;
+  }
+
+  .stat-icon {
+    font-size: 32px;
+  }
+
+  .card-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .header-actions {
+    width: 100%;
+  }
+
+  .scale-buttons {
+    flex: 1;
+  }
+
+  .scale-buttons .el-button {
+    flex: 1;
+  }
+
+  .filter-bar {
+    flex-direction: column;
+  }
+
+  .filter-bar .el-select,
+  .filter-bar .el-input {
+    width: 100% !important;
+  }
 }
 </style>
