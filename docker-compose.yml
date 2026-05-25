@@ -63,8 +63,10 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-this-in-production}
       DEBUG: ${DEBUG:-false}
       LOG_FILE: /var/log/backend/app.log
+      DISPLAY: ":99"
     ports:
       - "8000:8000"
+      - "6080:6080"
     depends_on:
       postgres:
         condition: service_healthy

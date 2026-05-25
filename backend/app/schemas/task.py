@@ -36,6 +36,7 @@ class TaskItem(ItemBase):
     total_cases: int
     success_count: int
     failed_count: int
+    skipped_count: int = 0
 
 
 class TaskDetail(TaskItem):

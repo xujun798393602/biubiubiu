@@ -25,6 +25,7 @@ class Task(BaseModel):
     total_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="总用例数")
     success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="通过数")
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="失败数")
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="跳过数")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="开始时间")
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, comment="完成时间")
 

@@ -6,7 +6,6 @@
         <el-menu-item index="/dashboard"><el-icon><Odometer /></el-icon><span>仪表盘</span></el-menu-item>
         <el-menu-item index="/cases"><el-icon><Document /></el-icon><span>用例管理</span></el-menu-item>
         <el-menu-item index="/tasks"><el-icon><List /></el-icon><span>任务管理</span></el-menu-item>
-        <el-menu-item index="/results"><el-icon><DataAnalysis /></el-icon><span>结果展示</span></el-menu-item>
         <el-menu-item index="/nodes"><el-icon><Monitor /></el-icon><span>节点管理</span></el-menu-item>
         <el-menu-item index="/system"><el-icon><Setting /></el-icon><span>系统管理</span></el-menu-item>
       </el-menu>

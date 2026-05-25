@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(PYTHONIOENCODING=utf-8 python *)",
+      "Bash(ssh *)",
+      "Bash(ping -n 2 192.168.3.200)",
+      "Bash(scoop install *)",
+      "Bash(choco install *)",
+      "Bash(pip install *)",
+      "Bash(npm run *)",
+      "Bash(chmod +x \"E:/shareDIR/TDD-auto-platform/scripts/run-migration.sh\")"
     ]
   }
 }

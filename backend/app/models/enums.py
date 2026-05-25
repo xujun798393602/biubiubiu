@@ -64,6 +64,12 @@ class NodeStatus(str, Enum):
     ERROR = "ERROR"
 
 
+class NodeType(str, Enum):
+    PLAYWRIGHT = "PLAYWRIGHT"
+    LOCUST = "LOCUST"
+    MIXED = "MIXED"
+
+
 class OperationType(str, Enum):
     CREATE = "CREATE"
     UPDATE = "UPDATE"

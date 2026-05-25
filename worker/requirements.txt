@@ -1,0 +1,10 @@
+# Worker Agent Dependencies
+httpx>=0.25.0
+redis>=5.0.0
+psutil>=5.9.0
+
+# Playwright (for UI tests)
+playwright>=1.40.0
+
+# Locust (for performance tests)
+locust>=2.20.0
