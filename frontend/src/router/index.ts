@@ -9,6 +9,11 @@ const router = createRouter({
       component: () => import('@/views/Login.vue'),
     },
     {
+      path: '/register',
+      name: 'Register',
+      component: () => import('@/views/Register.vue'),
+    },
+    {
       path: '/',
       component: () => import('@/layouts/MainLayout.vue'),
       redirect: '/dashboard',
@@ -26,7 +31,8 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
   const token = localStorage.getItem('token')
-  if (to.path !== '/login' && !token) {
+  const publicPaths = ['/login', '/register']
+  if (!publicPaths.includes(to.path) && !token) {
     next('/login')
   } else {
     next()

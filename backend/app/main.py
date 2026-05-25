@@ -132,9 +132,10 @@ async def readiness_check():
 
 
 # Register routers
-from app.api.v1.endpoints import auth, cases, tasks, results, nodes, system, record_ws
+from app.api.v1.endpoints import auth, cases, tasks, results, nodes, system, record_ws, users
 
 app.include_router(auth.router, prefix=settings.API_V1_PREFIX + "/auth", tags=["认证"])
+app.include_router(users.router, prefix=settings.API_V1_PREFIX + "/users", tags=["用户管理"])
 app.include_router(cases.router, prefix=settings.API_V1_PREFIX + "/cases", tags=["用例管理"])
 app.include_router(tasks.router, prefix=settings.API_V1_PREFIX + "/tasks", tags=["任务管理"])
 app.include_router(results.router, prefix=settings.API_V1_PREFIX + "/results", tags=["测试结果"])

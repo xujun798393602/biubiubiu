@@ -12,6 +12,10 @@
         <el-form-item>
           <el-button type="primary" size="large" style="width:100%" :loading="loading" native-type="submit">登 录</el-button>
         </el-form-item>
+        <div class="login-footer">
+          <span>没有账号？</span>
+          <el-link type="primary" @click="router.push('/register')">立即注册</el-link>
+        </div>
       </el-form>
     </el-card>
   </div>
@@ -49,4 +53,5 @@ async function handleLogin() {
 .login-container { display:flex; justify-content:center; align-items:center; height:100vh; background:#f0f2f5; }
 .login-card { width:400px; }
 .login-title { text-align:center; margin-bottom:24px; color:#303133; }
+.login-footer { text-align:center; color:#909399; font-size:14px; }
 </style>

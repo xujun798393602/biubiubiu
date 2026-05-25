@@ -22,10 +22,12 @@ from app.core.security import (
 from app.models.enums import OperationType, ResourceType
 from app.models.system import SystemLog
 from app.models.user import User, Role
+from app.models.user import UserRole
 from app.schemas.auth import (
     ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
+    RegisterRequest,
     ResetPasswordRequest,
     UserInfo,
     VerifyCodeRequest,
@@ -110,6 +112,49 @@ async def login(body: LoginRequest, request: Request, db: AsyncSession = Depends
             "permissions": permissions,
         }
     })
+
+
+@router.post("/register", response_model=ResponseModel, status_code=201)
+async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    # Check username uniqueness
+    existing = await db.execute(select(User).where(User.username == body.username, User.deleted_at.is_(None)))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "USERNAME_EXISTS", "message": "用户名已存在"},
+        )
+
+    # Check email uniqueness
+    existing = await db.execute(select(User).where(User.email == body.email, User.deleted_at.is_(None)))
+    if existing.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "EMAIL_EXISTS", "message": "邮箱已被注册"},
+        )
+
+    # Create user
+    user = User(
+        username=body.username,
+        password_hash=hash_password(body.password),
+        email=body.email,
+        real_name=body.real_name,
+        is_active=True,
+    )
+    db.add(user)
+    await db.flush()
+
+    # Assign default TESTER role
+    result = await db.execute(select(Role).where(Role.code == "TESTER", Role.deleted_at.is_(None)))
+    tester_role = result.scalar_one_or_none()
+    if not tester_role:
+        tester_role = Role(code="TESTER", name="测试人员", description="普通测试人员", permissions=["case:*", "task:*", "result:read"])
+        db.add(tester_role)
+        await db.flush()
+
+    db.add(UserRole(user_id=user.id, role_id=tester_role.id))
+    await db.commit()
+
+    return ResponseModel(message="注册成功，请登录")
 
 
 @router.post("/logout", response_model=ResponseModel)

@@ -1,6 +1,9 @@
 <template>
   <div class="system">
     <el-tabs v-model="activeTab">
+      <el-tab-pane label="账号管理" name="users">
+        <UserManagement />
+      </el-tab-pane>
       <el-tab-pane label="操作日志" name="logs">
         <el-table :data="logs" v-loading="logsLoading" stripe border>
           <el-table-column prop="operation" label="操作" width="100" />
@@ -26,8 +29,9 @@
 import { ref, reactive, onMounted } from 'vue'
 import { getSystemLogs, getNotifications } from '@/api/system'
 import type { SystemLogItem, NotificationItem } from '@/api/system'
+import UserManagement from '@/views/user/UserManagement.vue'
 
-const activeTab = ref('logs')
+const activeTab = ref('users')
 const logs = ref<SystemLogItem[]>([])
 const notifications = ref<NotificationItem[]>([])
 const logsLoading = ref(false)
