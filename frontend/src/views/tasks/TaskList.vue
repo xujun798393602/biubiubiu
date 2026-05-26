@@ -177,6 +177,76 @@
                 <el-input type="textarea" :model-value="currentDetail.detail.stderr" :rows="3" readonly class="error-output" />
               </div>
             </template>
+            <template v-else-if="currentDetail.case_type === 'PERFORMANCE'">
+              <!-- 执行参数 -->
+              <div class="detail-item">
+                <span class="detail-label">执行参数:</span>
+                <div class="perf-params">
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">并发用户</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.vusers }}</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">启动速率</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.spawn_rate }}/s</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">持续时间</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.duration }}s</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">退出码</span>
+                    <span class="perf-param-value"><el-tag :type="currentDetail.detail.exit_code === 0 ? 'success' : 'danger'" size="small">{{ currentDetail.detail.exit_code }}</el-tag></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 性能结果统计 -->
+              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.total" class="perf-overview">
+                <el-row :gutter="16">
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">总请求数</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.requests }}</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败数</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failures > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failures }}</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败率</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failure_rate > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failure_rate }}%</div></div></el-col>
+                  <el-col :span="4"><div class="perf-stat"><div class="perf-stat-label">平均响应</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.avg_ms }} ms</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">RPS</div><div class="perf-stat-value text-primary">{{ currentDetail.detail.stats.total.rps }}</div></div></el-col>
+                </el-row>
+              </div>
+
+              <!-- 请求明细表格 -->
+              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.endpoints && currentDetail.detail.stats.endpoints.length > 0" class="detail-item">
+                <span class="detail-label">请求明细:</span>
+                <el-table :data="currentDetail.detail.stats.endpoints" size="small" border style="margin-top:8px" stripe>
+                  <el-table-column prop="name" label="请求名称" min-width="200" show-overflow-tooltip />
+                  <el-table-column prop="requests" label="请求数" width="90" align="right" />
+                  <el-table-column prop="failures" label="失败数" width="80" align="right">
+                    <template #default="{row}"><span :class="row.failures > 0 ? 'text-danger' : ''">{{ row.failures }}</span></template>
+                  </el-table-column>
+                  <el-table-column prop="failure_rate" label="失败率" width="80" align="right">
+                    <template #default="{row}"><span :class="row.failure_rate > 0 ? 'text-danger' : ''">{{ row.failure_rate }}%</span></template>
+                  </el-table-column>
+                  <el-table-column prop="avg_ms" label="平均(ms)" width="100" align="right" />
+                  <el-table-column prop="min_ms" label="最小(ms)" width="90" align="right" />
+                  <el-table-column prop="max_ms" label="最大(ms)" width="90" align="right" />
+                  <el-table-column prop="median_ms" label="中位数(ms)" width="100" align="right" />
+                  <el-table-column prop="rps" label="RPS" width="80" align="right" />
+                </el-table>
+              </div>
+
+              <!-- Locust Web UI 跳转 -->
+              <div class="detail-item">
+                <span class="detail-label">Locust Web UI:</span>
+                <el-link type="primary" :href="locustWebUrl" target="_blank" :underline="false">
+                  <el-icon><Link /></el-icon> 打开 Locust 压测界面
+                </el-link>
+                <span style="color:#909399; font-size:12px; margin-left:8px">需先启动 locust-web 服务: docker compose -f docker-compose.worker.yml up -d locust-web</span>
+              </div>
+
+              <!-- 原始输出 -->
+              <div v-if="currentDetail.detail.output" class="detail-item">
+                <span class="detail-label">原始输出:</span>
+                <el-input type="textarea" :model-value="currentDetail.detail.output" :rows="8" readonly />
+              </div>
+            </template>
             <template v-else>
               <el-input type="textarea" :model-value="JSON.stringify(currentDetail.detail, null, 2)" :rows="6" readonly />
             </template>
@@ -194,9 +264,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document } from '@element-plus/icons-vue'
+import { Document, Link } from '@element-plus/icons-vue'
 import { getTaskList, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail } from '@/api/results'
@@ -219,6 +289,12 @@ const resultPagination = reactive({ page: 1, pageSize: 20, total: 0 })
 const detailDialogVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<ResultDetail | null>(null)
+
+const locustWebUrl = computed(() => {
+  if (!currentDetail.value?.detail) return '#'
+  const host = window.location.hostname
+  return `http://${host}:8089`
+})
 
 function formatDate(dateStr: string | null) { return dateStr ? new Date(dateStr).toLocaleString('zh-CN') : '-' }
 
@@ -331,4 +407,16 @@ onMounted(fetchData)
 .step-screenshot { border:1px solid #ebeef5; border-radius:6px; overflow:hidden; }
 .step-screenshot .el-image { width:100%; max-height:300px; display:block; }
 .step-screenshot .image-error { padding:20px; text-align:center; color:#c0c4cc; }
+
+/* 性能压测结果样式 */
+.perf-overview { background:#f5f7fa; border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+.perf-stat { text-align:left; padding:4px 0; }
+.perf-stat-label { font-size:12px; color:#909399; margin-bottom:2px; }
+.perf-stat-value { font-size:16px; font-weight:600; color:#303133; }
+.perf-params { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; }
+.perf-param-item { background:#f5f7fa; border-radius:6px; padding:10px 20px; min-width:140px; }
+.perf-param-label { display:block; font-size:12px; color:#909399; margin-bottom:4px; }
+.perf-param-value { display:block; font-size:15px; font-weight:600; color:#303133; }
+.text-danger { color:#f56c6c; }
+.text-primary { color:#409eff; }
 </style>
