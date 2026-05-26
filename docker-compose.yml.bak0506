@@ -5,9 +5,7 @@
 #   3. 执行: docker compose -f docker-compose.worker.yml up -d
 
 services:
-  # =========================
   # Locust 性能测试 Worker
-  # =========================
   locust-worker-1:
     build:
       context: ./worker
@@ -32,9 +30,7 @@ services:
           cpus: '${LOCUST_CPU_LIMIT:-4}'
           memory: '${LOCUST_MEMORY_LIMIT:-4G}'
 
-  # =========================
-  # Locust Web UI
-  # =========================
+  # Locust Web UI - 压测界面
   locust-web:
     build:
       context: ./worker
@@ -50,30 +46,13 @@ services:
     volumes:
       - ./worker/scripts:/scripts:ro
 
-  # ========================================
-  # ✅ Playwright 浏览器基础镜像（新增）
-  # ========================================
-  playwright-base:
-    image: tdd/playwright-base:1.47.0
-    container_name: playwright-base
-    restart: unless-stopped
-    command: sleep infinity
-    volumes:
-      - playwright-browsers:/ms-playwright
-    networks:
-      - auto-test-net
-
-  # ========================================
-  # ✅ Playwright UI 测试 Worker（改造）
-  # ========================================
+  # Playwright UI测试 Worker
   playwright-worker-1:
     build:
       context: ./worker
       dockerfile: Dockerfile.playwright
     container_name: playwright-worker-1
     restart: unless-stopped
-    depends_on:
-      - playwright-base
     environment:
       BACKEND_URL: http://backend:8000
       REDIS_URL: redis://redis:6379/0
@@ -82,11 +61,10 @@ services:
       API_KEY: ${PLAYWRIGHT_WORKER_API_KEY:-}
       MAX_CONCURRENT: ${PLAYWRIGHT_MAX_CONCURRENT:-3}
       HEARTBEAT_INTERVAL: 10
-      # ✅ 删除 DISPLAY（不再使用 Xvfb）
+      DISPLAY: ":99"
     networks:
       - auto-test-net
     volumes:
-      - playwright-browsers:/ms-playwright:ro
       - /opt/auto-test/logs/workers:/var/log/workers:z
     deploy:
       resources:
@@ -94,22 +72,6 @@ services:
           cpus: '${PLAYWRIGHT_CPU_LIMIT:-2}'
           memory: '${PLAYWRIGHT_MEMORY_LIMIT:-4G}'
 
-  # ✅ 可选：多 worker 并发（直接复制即可）
-  # playwright-worker-2:
-  #   <<: *playwright-worker-1
-  #   container_name: playwright-worker-2
-  #   environment:
-  #     NODE_NAME: playwright-worker-2
-
-# =========================
-# Volumes
-# =========================
-volumes:
-  playwright-browsers:
-
-# =========================
-# Networks
-# =========================
 networks:
   auto-test-net:
     external: true

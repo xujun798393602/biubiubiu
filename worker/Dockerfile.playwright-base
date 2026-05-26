@@ -1,0 +1,38 @@
+# worker/Dockerfile.playwright-base
+# 仅安装 Playwright + Chromium，供所有 worker 共享
+FROM python:3.11-slim-bookworm
+
+ARG PW_VER=1.47.0
+
+# Debian 国内源
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
+# Chromium 运行时依赖（无 Xvfb）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# PyPI 国内源 + 锁版本
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    playwright==${PW_VER}
+
+# 国内 Playwright 浏览器镜像
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# 仅安装 Chromium（版本由 playwright==1.47.0 决定）
+RUN playwright install chromium
+
+CMD ["echo", "playwright-base:${PW_VER} ready"]

@@ -90,6 +90,23 @@ async def list_results(
     })
 
 
+@router.get("/perf-script/{case_id}")
+async def get_perf_script(case_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Return the Locust script for a performance case as a downloadable file."""
+    case = (await db.execute(select(TestCase).where(TestCase.id == case_id, TestCase.deleted_at.is_(None)))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
+    if case.type != "PERFORMANCE" or not case.perf_script:
+        raise HTTPException(status_code=400, detail={"code": "NOT_PERF_CASE", "message": "该用例不是性能压测类型或未配置脚本"})
+
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        content=case.perf_script,
+        media_type="text/x-python",
+        headers={"Content-Disposition": f'attachment; filename="locust_{case_id[:8]}.py"'},
+    )
+
+
 @router.get("/api/{result_id}", response_model=ResponseModel)
 async def get_result_detail(result_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     result = (await db.execute(select(TestResult).where(TestResult.id == result_id, TestResult.deleted_at.is_(None)))).scalar_one_or_none()
