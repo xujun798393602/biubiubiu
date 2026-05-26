@@ -2,11 +2,23 @@
   <div class="task-list">
     <el-card>
       <template #header>
-        <div class="card-header"><span>任务管理</span><el-button type="primary" icon="Plus" @click="handleCreate">新建任务</el-button></div>
+        <div class="card-header">
+          <span>任务管理</span>
+          <div class="header-actions">
+            <el-input v-model="filters.keyword" placeholder="搜索任务名称" clearable style="width:180px" @clear="fetchData" @keyup.enter="fetchData">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-select v-model="filters.creator_id" placeholder="筛选创建人" clearable style="width:150px" @change="fetchData">
+              <el-option v-for="c in creators" :key="c.id" :label="c.username" :value="c.id" />
+            </el-select>
+            <el-button type="primary" icon="Plus" @click="handleCreate">新建任务</el-button>
+          </div>
+        </div>
       </template>
       <el-table :data="taskList" v-loading="loading" stripe border>
         <el-table-column prop="name" label="任务名称" min-width="200" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='SUCCESS'?'success':row.status==='FAILED'?'danger':row.status==='RUNNING'?'warning':'info'" size="small">{{ row.status }}</el-tag></template></el-table-column>
+        <el-table-column prop="creator_name" label="创建人" width="110" show-overflow-tooltip />
         <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='HIGH'?'danger':'warning'" size="small">{{ row.priority }}</el-tag></template></el-table-column>
         <el-table-column prop="total_cases" label="用例数" width="80" />
         <el-table-column prop="success_count" label="通过" width="80" />
@@ -266,8 +278,8 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document, Link } from '@element-plus/icons-vue'
-import { getTaskList, deleteTask, startTask, cancelTask } from '@/api/tasks'
+import { Document, Link, Search } from '@element-plus/icons-vue'
+import { getTaskList, getTaskCreators, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail } from '@/api/results'
 import type { ResultOverview, ResultItem, ResultDetail } from '@/api/results'
@@ -275,6 +287,8 @@ import type { ResultOverview, ResultItem, ResultDetail } from '@/api/results'
 const loading = ref(false)
 const taskList = ref<TaskItem[]>([])
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
+const filters = reactive({ keyword: '', creator_id: '' })
+const creators = ref<{ id: string; username: string }[]>([])
 
 // 结果展示弹窗相关状态
 const resultDialogVisible = ref(false)
@@ -301,10 +315,20 @@ function formatDate(dateStr: string | null) { return dateStr ? new Date(dateStr)
 async function fetchData() {
   loading.value = true
   try {
-    const res = await getTaskList({ page: pagination.page, pageSize: pagination.pageSize })
+    const params: any = { page: pagination.page, pageSize: pagination.pageSize }
+    if (filters.keyword) params.keyword = filters.keyword
+    if (filters.creator_id) params.creator_id = filters.creator_id
+    const res = await getTaskList(params)
     taskList.value = res.data?.list || []
     pagination.total = res.data?.pagination?.total || 0
   } catch {} finally { loading.value = false }
+}
+
+async function fetchCreators() {
+  try {
+    const res = await getTaskCreators()
+    creators.value = res.data || []
+  } catch { creators.value = [] }
 }
 
 async function fetchResults() {
@@ -352,11 +376,12 @@ async function handleDetail(row: ResultItem) {
   }
 }
 
-onMounted(fetchData)
+onMounted(() => { fetchData(); fetchCreators() })
 </script>
 
 <style scoped>
 .card-header { display:flex; align-items:center; justify-content:space-between; }
+.header-actions { display:flex; align-items:center; gap:10px; }
 .pagination { margin-top:16px; display:flex; justify-content:flex-end; }
 
 /* 结果展示弹窗样式 */

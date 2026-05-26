@@ -6,6 +6,7 @@ export interface TaskItem {
   status: string
   priority: string
   creator_id: string
+  creator_name: string
   total_cases: number
   success_count: number
   failed_count: number
@@ -16,7 +17,11 @@ export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELL
 export type TaskPriority = 'HIGH' | 'MEDIUM' | 'LOW'
 
 export function getTaskList(params: any) {
-  return request.get('/tasks', { params })
+  return request.get<any, any>('/tasks', { params })
+}
+
+export function getTaskCreators() {
+  return request.get<any, any>('/tasks/creators')
 }
 
 export function getTaskDetail(id: string) {
