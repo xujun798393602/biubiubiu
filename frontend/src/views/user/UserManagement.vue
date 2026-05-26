@@ -179,8 +179,9 @@ onMounted(() => fetchUsers())
 <style scoped>
 .toolbar {
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
   align-items: center;
+  gap: 10px;
   margin-bottom: 16px;
 }
 .pagination {

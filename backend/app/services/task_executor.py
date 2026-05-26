@@ -441,6 +441,103 @@ class TaskExecutor:
             }
             return {"status": ResultStatus.FAILED, "detail": detail}
 
+    @staticmethod
+    def _parse_locust_stats(stdout: str) -> dict:
+        """Parse Locust stdout text into structured stats."""
+        import re
+        stats = {"endpoints": [], "total": None}
+        lines = stdout.strip().split("\n")
+
+        # Find the stats table - look for the Aggregated/Total line
+        table_started = False
+        header_line = ""
+        separator_idx = -1
+
+        for i, line in enumerate(lines):
+            if line.startswith("Name") and "# reqs" in line:
+                table_started = True
+                header_line = line
+                continue
+            if table_started and set(line.strip()) <= {"-", " ", "+"}:
+                separator_idx = i
+                continue
+
+        if not table_started or separator_idx < 0:
+            return stats
+
+        # Parse each data row after the header separator
+        for line in lines[separator_idx + 1:]:
+            line = line.strip()
+            if not line or line.startswith("Aggregating"):
+                continue
+            # End of table: blank line or new section
+            if set(line) <= {"-", " ", "+"}:
+                break
+
+            # Parse: Name  # reqs  # fails  Avg  Min  Max  Median  req/s  failures/s
+            parts = line.rsplit(None, 8)
+            if len(parts) < 7:
+                continue
+
+            name = parts[0]
+            try:
+                reqs = int(parts[1])
+                fails = int(parts[2])
+                avg = float(parts[3])
+                min_val = float(parts[4])
+                max_val = float(parts[5])
+                median = float(parts[6])
+                rps = float(parts[7]) if len(parts) > 7 else 0
+            except (ValueError, IndexError):
+                continue
+
+            entry = {
+                "name": name,
+                "requests": reqs,
+                "failures": fails,
+                "avg_ms": round(avg, 2),
+                "min_ms": round(min_val, 2),
+                "max_ms": round(max_val, 2),
+                "median_ms": round(median, 2),
+                "rps": round(rps, 2),
+                "failure_rate": round(fails / reqs * 100, 2) if reqs > 0 else 0,
+            }
+
+            if name.lower() in ("aggregated", "total"):
+                stats["total"] = entry
+            else:
+                stats["endpoints"].append(entry)
+
+        # If no explicit total line, compute from endpoints
+        if not stats["total"] and stats["endpoints"]:
+            total_reqs = sum(e["requests"] for e in stats["endpoints"])
+            total_fails = sum(e["failures"] for e in stats["endpoints"])
+            total_rps = sum(e["rps"] for e in stats["endpoints"])
+            # Weighted average
+            total_avg = sum(e["avg_ms"] * e["requests"] for e in stats["endpoints"]) / total_reqs if total_reqs > 0 else 0
+            stats["total"] = {
+                "name": "Aggregated",
+                "requests": total_reqs,
+                "failures": total_fails,
+                "avg_ms": round(total_avg, 2),
+                "min_ms": min((e["min_ms"] for e in stats["endpoints"]), default=0),
+                "max_ms": max((e["max_ms"] for e in stats["endpoints"]), default=0),
+                "median_ms": 0,
+                "rps": round(total_rps, 2),
+                "failure_rate": round(total_fails / total_reqs * 100, 2) if total_reqs > 0 else 0,
+            }
+
+        # Extract percentile info if present (p50, p95, p99)
+        for line in lines:
+            if "p50" in line.lower() or "p95" in line.lower() or "p99" in line.lower():
+                # Try to parse percentile data
+                p_match = re.findall(r'(p\d+)[\s:]+([\d.]+)', line, re.IGNORECASE)
+                if p_match and stats["total"]:
+                    for p_name, p_val in p_match:
+                        stats["total"][f"{p_name.lower()}_ms"] = round(float(p_val), 2)
+
+        return stats
+
     async def _execute_perf_case(self, case: TestCase) -> dict:
         """Execute a performance test case using Locust."""
         script = case.perf_script
@@ -475,12 +572,16 @@ class TaskExecutor:
             stdout_text = stdout.decode("utf-8", errors="replace")
             stderr_text = stderr.decode("utf-8", errors="replace")
 
+            # Parse structured stats from Locust output
+            parsed_stats = self._parse_locust_stats(stdout_text)
+
             detail = {
                 "exit_code": proc.returncode,
                 "vusers": vusers,
                 "spawn_rate": spawn_rate,
                 "duration": duration,
                 "output": stdout_text[-3000:],
+                "stats": parsed_stats,
             }
 
             if proc.returncode == 0:

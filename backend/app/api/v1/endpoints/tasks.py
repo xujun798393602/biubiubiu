@@ -25,10 +25,11 @@ async def list_tasks(
     status: str = Query(None),
     priority: str = Query(None),
     keyword: str = Query(None),
+    creator_id: str = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = select(Task).where(Task.deleted_at.is_(None))
+    query = select(Task, User.username).outerjoin(User, Task.creator_id == User.id).where(Task.deleted_at.is_(None))
     count_query = select(func.count()).select_from(Task).where(Task.deleted_at.is_(None))
 
     if status:
@@ -40,14 +41,37 @@ async def list_tasks(
     if keyword:
         query = query.where(Task.name.ilike(f"%{keyword}%"))
         count_query = count_query.where(Task.name.ilike(f"%{keyword}%"))
+    if creator_id:
+        query = query.where(Task.creator_id == creator_id)
+        count_query = count_query.where(Task.creator_id == creator_id)
 
     total = (await db.execute(count_query)).scalar()
-    items = (await db.execute(query.order_by(Task.created_at.desc()).offset((page - 1) * pageSize).limit(pageSize))).scalars().all()
+    rows = (await db.execute(query.order_by(Task.created_at.desc()).offset((page - 1) * pageSize).limit(pageSize))).all()
+
+    task_list = []
+    for task, creator_name in rows:
+        item = TaskItem.model_validate(task).model_dump()
+        item["creator_name"] = creator_name or ""
+        task_list.append(item)
 
     return ResponseModel(data={
-        "list": [TaskItem.model_validate(i) for i in items],
+        "list": task_list,
         "pagination": {"page": page, "pageSize": pageSize, "total": total, "totalPages": (total + pageSize - 1) // pageSize},
     })
+
+
+@router.get("/creators", response_model=ResponseModel)
+async def list_creators(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Return distinct creators for filter dropdown."""
+    query = (
+        select(User.id, User.username)
+        .join(Task, Task.creator_id == User.id)
+        .where(Task.deleted_at.is_(None), User.deleted_at.is_(None))
+        .distinct()
+        .order_by(User.username)
+    )
+    rows = (await db.execute(query)).all()
+    return ResponseModel(data=[{"id": str(r.id), "username": r.username} for r in rows])
 
 
 @router.post("", response_model=ResponseModel, status_code=201)
@@ -79,10 +103,14 @@ async def create_task(body: TaskCreate, db: AsyncSession = Depends(get_db), curr
 
 @router.get("/{task_id}", response_model=ResponseModel)
 async def get_task(task_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
-    result = await db.execute(select(Task).where(Task.id == task_id, Task.deleted_at.is_(None)))
-    task = result.scalar_one_or_none()
-    if not task:
+    result = await db.execute(
+        select(Task, User.username).outerjoin(User, Task.creator_id == User.id)
+        .where(Task.id == task_id, Task.deleted_at.is_(None))
+    )
+    row = result.one_or_none()
+    if not row:
         raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": "任务不存在"})
+    task, creator_name = row
 
     # Fetch associated cases via join
     cases_query = (
@@ -103,6 +131,7 @@ async def get_task(task_id: str, db: AsyncSession = Depends(get_db), current_use
     ]
 
     task_data = TaskItem.model_validate(task).model_dump()
+    task_data["creator_name"] = creator_name or ""
     task_data["schedule_cron"] = task.schedule_cron
     task_data["cases"] = [c.model_dump() for c in cases]
     return ResponseModel(data=task_data)

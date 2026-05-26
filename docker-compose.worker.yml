@@ -30,6 +30,22 @@ services:
           cpus: '${LOCUST_CPU_LIMIT:-4}'
           memory: '${LOCUST_MEMORY_LIMIT:-8G}'
 
+  # Locust Web UI - 压测界面
+  locust-web:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile.locust
+    container_name: locust-web
+    restart: unless-stopped
+    entrypoint: ["locust"]
+    command: ["-f", "/scripts/empty_locustfile.py", "--web-host", "0.0.0.0", "--web-port", "8089"]
+    ports:
+      - "8089:8089"
+    networks:
+      - auto-test-net
+    volumes:
+      - ./worker/scripts:/scripts:ro
+
   # Playwright UI测试 Worker
   playwright-worker-1:
     build:

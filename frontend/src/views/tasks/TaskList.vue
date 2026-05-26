@@ -2,11 +2,23 @@
   <div class="task-list">
     <el-card>
       <template #header>
-        <div class="card-header"><span>任务管理</span><el-button type="primary" icon="Plus" @click="handleCreate">新建任务</el-button></div>
+        <div class="card-header">
+          <span>任务管理</span>
+          <div class="header-actions">
+            <el-input v-model="filters.keyword" placeholder="搜索任务名称" clearable style="width:180px" @clear="fetchData" @keyup.enter="fetchData">
+              <template #prefix><el-icon><Search /></el-icon></template>
+            </el-input>
+            <el-select v-model="filters.creator_id" placeholder="筛选创建人" clearable style="width:150px" @change="fetchData">
+              <el-option v-for="c in creators" :key="c.id" :label="c.username" :value="c.id" />
+            </el-select>
+            <el-button type="primary" icon="Plus" @click="handleCreate">新建任务</el-button>
+          </div>
+        </div>
       </template>
       <el-table :data="taskList" v-loading="loading" stripe border>
         <el-table-column prop="name" label="任务名称" min-width="200" show-overflow-tooltip />
         <el-table-column prop="status" label="状态" width="100"><template #default="{row}"><el-tag :type="row.status==='SUCCESS'?'success':row.status==='FAILED'?'danger':row.status==='RUNNING'?'warning':'info'" size="small">{{ row.status }}</el-tag></template></el-table-column>
+        <el-table-column prop="creator_name" label="创建人" width="110" show-overflow-tooltip />
         <el-table-column prop="priority" label="优先级" width="80"><template #default="{row}"><el-tag :type="row.priority==='HIGH'?'danger':'warning'" size="small">{{ row.priority }}</el-tag></template></el-table-column>
         <el-table-column prop="total_cases" label="用例数" width="80" />
         <el-table-column prop="success_count" label="通过" width="80" />
@@ -177,6 +189,76 @@
                 <el-input type="textarea" :model-value="currentDetail.detail.stderr" :rows="3" readonly class="error-output" />
               </div>
             </template>
+            <template v-else-if="currentDetail.case_type === 'PERFORMANCE'">
+              <!-- 执行参数 -->
+              <div class="detail-item">
+                <span class="detail-label">执行参数:</span>
+                <div class="perf-params">
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">并发用户</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.vusers }}</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">启动速率</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.spawn_rate }}/s</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">持续时间</span>
+                    <span class="perf-param-value">{{ currentDetail.detail.duration }}s</span>
+                  </div>
+                  <div class="perf-param-item">
+                    <span class="perf-param-label">退出码</span>
+                    <span class="perf-param-value"><el-tag :type="currentDetail.detail.exit_code === 0 ? 'success' : 'danger'" size="small">{{ currentDetail.detail.exit_code }}</el-tag></span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 性能结果统计 -->
+              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.total" class="perf-overview">
+                <el-row :gutter="16">
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">总请求数</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.requests }}</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败数</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failures > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failures }}</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败率</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failure_rate > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failure_rate }}%</div></div></el-col>
+                  <el-col :span="4"><div class="perf-stat"><div class="perf-stat-label">平均响应</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.avg_ms }} ms</div></div></el-col>
+                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">RPS</div><div class="perf-stat-value text-primary">{{ currentDetail.detail.stats.total.rps }}</div></div></el-col>
+                </el-row>
+              </div>
+
+              <!-- 请求明细表格 -->
+              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.endpoints && currentDetail.detail.stats.endpoints.length > 0" class="detail-item">
+                <span class="detail-label">请求明细:</span>
+                <el-table :data="currentDetail.detail.stats.endpoints" size="small" border style="margin-top:8px" stripe>
+                  <el-table-column prop="name" label="请求名称" min-width="200" show-overflow-tooltip />
+                  <el-table-column prop="requests" label="请求数" width="90" align="right" />
+                  <el-table-column prop="failures" label="失败数" width="80" align="right">
+                    <template #default="{row}"><span :class="row.failures > 0 ? 'text-danger' : ''">{{ row.failures }}</span></template>
+                  </el-table-column>
+                  <el-table-column prop="failure_rate" label="失败率" width="80" align="right">
+                    <template #default="{row}"><span :class="row.failure_rate > 0 ? 'text-danger' : ''">{{ row.failure_rate }}%</span></template>
+                  </el-table-column>
+                  <el-table-column prop="avg_ms" label="平均(ms)" width="100" align="right" />
+                  <el-table-column prop="min_ms" label="最小(ms)" width="90" align="right" />
+                  <el-table-column prop="max_ms" label="最大(ms)" width="90" align="right" />
+                  <el-table-column prop="median_ms" label="中位数(ms)" width="100" align="right" />
+                  <el-table-column prop="rps" label="RPS" width="80" align="right" />
+                </el-table>
+              </div>
+
+              <!-- Locust Web UI 跳转 -->
+              <div class="detail-item">
+                <span class="detail-label">Locust Web UI:</span>
+                <el-link type="primary" :href="locustWebUrl" target="_blank" :underline="false">
+                  <el-icon><Link /></el-icon> 打开 Locust 压测界面
+                </el-link>
+                <span style="color:#909399; font-size:12px; margin-left:8px">需先启动 locust-web 服务: docker compose -f docker-compose.worker.yml up -d locust-web</span>
+              </div>
+
+              <!-- 原始输出 -->
+              <div v-if="currentDetail.detail.output" class="detail-item">
+                <span class="detail-label">原始输出:</span>
+                <el-input type="textarea" :model-value="currentDetail.detail.output" :rows="8" readonly />
+              </div>
+            </template>
             <template v-else>
               <el-input type="textarea" :model-value="JSON.stringify(currentDetail.detail, null, 2)" :rows="6" readonly />
             </template>
@@ -194,10 +276,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document } from '@element-plus/icons-vue'
-import { getTaskList, deleteTask, startTask, cancelTask } from '@/api/tasks'
+import { Document, Link, Search } from '@element-plus/icons-vue'
+import { getTaskList, getTaskCreators, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail } from '@/api/results'
 import type { ResultOverview, ResultItem, ResultDetail } from '@/api/results'
@@ -205,6 +287,8 @@ import type { ResultOverview, ResultItem, ResultDetail } from '@/api/results'
 const loading = ref(false)
 const taskList = ref<TaskItem[]>([])
 const pagination = reactive({ page: 1, pageSize: 20, total: 0 })
+const filters = reactive({ keyword: '', creator_id: '' })
+const creators = ref<{ id: string; username: string }[]>([])
 
 // 结果展示弹窗相关状态
 const resultDialogVisible = ref(false)
@@ -220,15 +304,31 @@ const detailDialogVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<ResultDetail | null>(null)
 
+const locustWebUrl = computed(() => {
+  if (!currentDetail.value?.detail) return '#'
+  const host = window.location.hostname
+  return `http://${host}:8089`
+})
+
 function formatDate(dateStr: string | null) { return dateStr ? new Date(dateStr).toLocaleString('zh-CN') : '-' }
 
 async function fetchData() {
   loading.value = true
   try {
-    const res = await getTaskList({ page: pagination.page, pageSize: pagination.pageSize })
+    const params: any = { page: pagination.page, pageSize: pagination.pageSize }
+    if (filters.keyword) params.keyword = filters.keyword
+    if (filters.creator_id) params.creator_id = filters.creator_id
+    const res = await getTaskList(params)
     taskList.value = res.data?.list || []
     pagination.total = res.data?.pagination?.total || 0
   } catch {} finally { loading.value = false }
+}
+
+async function fetchCreators() {
+  try {
+    const res = await getTaskCreators()
+    creators.value = res.data || []
+  } catch { creators.value = [] }
 }
 
 async function fetchResults() {
@@ -276,11 +376,12 @@ async function handleDetail(row: ResultItem) {
   }
 }
 
-onMounted(fetchData)
+onMounted(() => { fetchData(); fetchCreators() })
 </script>
 
 <style scoped>
 .card-header { display:flex; align-items:center; justify-content:space-between; }
+.header-actions { display:flex; align-items:center; gap:10px; }
 .pagination { margin-top:16px; display:flex; justify-content:flex-end; }
 
 /* 结果展示弹窗样式 */
@@ -331,4 +432,16 @@ onMounted(fetchData)
 .step-screenshot { border:1px solid #ebeef5; border-radius:6px; overflow:hidden; }
 .step-screenshot .el-image { width:100%; max-height:300px; display:block; }
 .step-screenshot .image-error { padding:20px; text-align:center; color:#c0c4cc; }
+
+/* 性能压测结果样式 */
+.perf-overview { background:#f5f7fa; border-radius:8px; padding:12px 16px; margin-bottom:16px; }
+.perf-stat { text-align:left; padding:4px 0; }
+.perf-stat-label { font-size:12px; color:#909399; margin-bottom:2px; }
+.perf-stat-value { font-size:16px; font-weight:600; color:#303133; }
+.perf-params { display:flex; flex-wrap:wrap; gap:12px; margin-top:8px; }
+.perf-param-item { background:#f5f7fa; border-radius:6px; padding:10px 20px; min-width:140px; }
+.perf-param-label { display:block; font-size:12px; color:#909399; margin-bottom:4px; }
+.perf-param-value { display:block; font-size:15px; font-weight:600; color:#303133; }
+.text-danger { color:#f56c6c; }
+.text-primary { color:#409eff; }
 </style>
