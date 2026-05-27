@@ -47,6 +47,7 @@ services:
       - "8089:8089"
     environment:
       SCRIPTS_DIR: /scripts
+      BACKEND_URL: http://backend:8000
     networks:
       - auto-test-net
     volumes:

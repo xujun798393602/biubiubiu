@@ -213,50 +213,87 @@
                 </div>
               </div>
 
-              <!-- 性能结果统计 -->
-              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.total" class="perf-overview">
-                <el-row :gutter="16">
-                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">总请求数</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.requests }}</div></div></el-col>
-                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败数</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failures > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failures }}</div></div></el-col>
-                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">失败率</div><div class="perf-stat-value" :class="currentDetail.detail.stats.total.failure_rate > 0 ? 'text-danger' : ''">{{ currentDetail.detail.stats.total.failure_rate }}%</div></div></el-col>
-                  <el-col :span="4"><div class="perf-stat"><div class="perf-stat-label">平均响应</div><div class="perf-stat-value">{{ currentDetail.detail.stats.total.avg_ms }} ms</div></div></el-col>
-                  <el-col :span="5"><div class="perf-stat"><div class="perf-stat-label">RPS</div><div class="perf-stat-value text-primary">{{ currentDetail.detail.stats.total.rps }}</div></div></el-col>
-                </el-row>
-              </div>
-
-              <!-- 请求明细表格 -->
-              <div v-if="currentDetail.detail.stats && currentDetail.detail.stats.endpoints && currentDetail.detail.stats.endpoints.length > 0" class="detail-item">
-                <span class="detail-label">请求明细:</span>
-                <el-table :data="currentDetail.detail.stats.endpoints" size="small" border style="margin-top:8px" stripe>
-                  <el-table-column prop="name" label="请求名称" min-width="200" show-overflow-tooltip />
-                  <el-table-column prop="requests" label="请求数" width="90" align="right" />
-                  <el-table-column prop="failures" label="失败数" width="80" align="right">
+              <!-- STATISTICS 统计表格 (仅已完成时展示) -->
+              <div v-if="(currentDetail.status === 'SUCCESS' || currentDetail.status === 'FAILED') && currentDetail.detail.stats && currentDetail.detail.stats.endpoints && currentDetail.detail.stats.endpoints.length > 0" class="detail-item">
+                <span class="detail-label">STATISTICS:</span>
+                <el-table :data="perfTableData" size="small" border style="margin-top:8px" stripe :summary-method="getPerfSummary" show-summary>
+                  <el-table-column prop="type" label="Type" width="80" align="center">
+                    <template #default="{row}"><el-tag size="small" :type="row.type === 'GET' ? '' : row.type === 'POST' ? 'success' : 'warning'">{{ row.type }}</el-tag></template>
+                  </el-table-column>
+                  <el-table-column prop="name" label="Name" min-width="200" show-overflow-tooltip />
+                  <el-table-column prop="requests" label="# requests" width="100" align="right" />
+                  <el-table-column prop="failures" label="# failures" width="100" align="right">
                     <template #default="{row}"><span :class="row.failures > 0 ? 'text-danger' : ''">{{ row.failures }}</span></template>
                   </el-table-column>
-                  <el-table-column prop="failure_rate" label="失败率" width="80" align="right">
-                    <template #default="{row}"><span :class="row.failure_rate > 0 ? 'text-danger' : ''">{{ row.failure_rate }}%</span></template>
-                  </el-table-column>
-                  <el-table-column prop="avg_ms" label="平均(ms)" width="100" align="right" />
-                  <el-table-column prop="min_ms" label="最小(ms)" width="90" align="right" />
-                  <el-table-column prop="max_ms" label="最大(ms)" width="90" align="right" />
-                  <el-table-column prop="median_ms" label="中位数(ms)" width="100" align="right" />
+                  <el-table-column prop="median_ms" label="Median (ms)" width="110" align="right" />
+                  <el-table-column prop="avg_ms" label="Average (ms)" width="110" align="right" />
+                  <el-table-column prop="min_ms" label="Min (ms)" width="90" align="right" />
+                  <el-table-column prop="max_ms" label="Max (ms)" width="90" align="right" />
+                  <el-table-column prop="avg_content_length" label="Avg Size" width="90" align="right" />
                   <el-table-column prop="rps" label="RPS" width="80" align="right" />
+                  <el-table-column prop="failures_per_sec" label="failures/s" width="100" align="right">
+                    <template #default="{row}"><span :class="row.failures_per_sec > 0 ? 'text-danger' : ''">{{ row.failures_per_sec }}</span></template>
+                  </el-table-column>
                 </el-table>
+              </div>
+
+              <!-- CHARTS 柱状图 (仅已完成时展示) -->
+              <div v-if="(currentDetail.status === 'SUCCESS' || currentDetail.status === 'FAILED') && currentDetail.detail.stats && currentDetail.detail.stats.endpoints && currentDetail.detail.stats.endpoints.length > 0" class="detail-item">
+                <span class="detail-label">CHARTS:</span>
+                <div class="charts-container">
+                  <!-- 响应时间对比图 -->
+                  <div class="chart-box">
+                    <div class="chart-title">Average Response Time (ms)</div>
+                    <div class="bar-chart">
+                      <div v-for="ep in currentDetail.detail.stats.endpoints" :key="ep.name" class="bar-row">
+                        <div class="bar-label" :title="ep.name">{{ ep.name.length > 30 ? ep.name.slice(0, 30) + '...' : ep.name }}</div>
+                        <div class="bar-track">
+                          <div class="bar-fill bar-fill-primary" :style="{ width: getBarWidth(ep.avg_ms, maxAvgMs) + '%' }"></div>
+                          <span class="bar-value">{{ ep.avg_ms }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- 请求数对比图 -->
+                  <div class="chart-box">
+                    <div class="chart-title">Total Requests</div>
+                    <div class="bar-chart">
+                      <div v-for="ep in currentDetail.detail.stats.endpoints" :key="ep.name" class="bar-row">
+                        <div class="bar-label" :title="ep.name">{{ ep.name.length > 30 ? ep.name.slice(0, 30) + '...' : ep.name }}</div>
+                        <div class="bar-track">
+                          <div class="bar-fill bar-fill-success" :style="{ width: getBarWidth(ep.requests, maxRequests) + '%' }"></div>
+                          <span class="bar-value">{{ ep.requests }}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- Locust 压测脚本 & Web UI -->
               <div class="detail-item">
                 <span class="detail-label">压测脚本:</span>
-                <div style="margin-top:8px; display:flex; align-items:center; gap:12px;">
+                <div style="margin-top:8px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                  <el-button v-if="currentDetail.status === 'SUCCESS' || currentDetail.status === 'FAILED'" type="success" size="small" @click="viewHistoricalResults">
+                    <el-icon><TrendCharts /></el-icon> 查看结果
+                  </el-button>
                   <el-button type="primary" size="small" :loading="syncLoading" @click="syncAndOpenLocust">
-                    <el-icon><Link /></el-icon> 同步到 Locust 并打开
+                    <el-icon><Link /></el-icon> 重新执行
                   </el-button>
                   <el-button size="small" @click="downloadPerfScript">
                     <el-icon><Download /></el-icon> 下载脚本
                   </el-button>
+                  <el-button size="small" @click="viewPerfScript">
+                    <el-icon><Document /></el-icon> 查看脚本
+                  </el-button>
                 </div>
                 <div style="margin-top:8px; color:#909399; font-size:12px;">
-                  点击"同步到 Locust 并打开"将自动同步脚本到 Locust Web UI，无需手动导入
+                  <span v-if="currentDetail.status === 'SUCCESS' || currentDetail.status === 'FAILED'">
+                    点击"查看结果"查看本次执行的详细统计 | 点击"重新执行"可重新跑一次压测
+                  </span>
+                  <span v-else>
+                    点击"重新执行"将同步脚本到 Locust Web UI 并打开，可手动启动压测
+                  </span>
                 </div>
                 <el-input v-if="currentDetail.detail.output" type="textarea" :model-value="currentDetail.detail.output" :rows="4" readonly style="margin-top:8px" />
               </div>
@@ -264,9 +301,9 @@
             <template v-else>
               <el-input type="textarea" :model-value="JSON.stringify(currentDetail.detail, null, 2)" :rows="6" readonly />
             </template>
-            <div v-if="currentDetail.detail.error" class="detail-item error-message">
-              <span class="detail-label">错误信息:</span>
-              <span class="error-text">{{ currentDetail.detail.error }}</span>
+            <div v-if="currentDetail.detail.error" class="detail-item" :class="currentDetail.detail.exit_code === 1 ? 'warning-message' : 'error-message'">
+              <span class="detail-label">{{ currentDetail.detail.exit_code === 1 ? '提示:' : '错误信息:' }}</span>
+              <span :class="currentDetail.detail.exit_code === 1 ? 'warning-text' : 'error-text'">{{ currentDetail.detail.error }}</span>
             </div>
           </div>
           <el-empty v-else description="暂无详情" />
@@ -274,13 +311,21 @@
       </div>
       <div v-else v-loading="detailLoading" style="min-height: 200px;"></div>
     </el-dialog>
+
+    <!-- 查看脚本弹窗 -->
+    <el-dialog v-model="scriptDialogVisible" title="压测脚本查看" width="65%" top="5vh" destroy-on-close>
+      <div v-loading="scriptLoading" style="min-height:200px;">
+        <pre v-if="scriptContent" class="script-code-block"><code>{{ scriptContent }}</code></pre>
+        <el-empty v-else-if="!scriptLoading" description="暂无脚本内容" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document, Link, Search, Download } from '@element-plus/icons-vue'
+import { Document, Link, Search, Download, TrendCharts } from '@element-plus/icons-vue'
 import { getTaskList, getTaskCreators, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail, syncPerfScript } from '@/api/results'
@@ -306,6 +351,9 @@ const detailDialogVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<ResultDetail | null>(null)
 const syncLoading = ref(false)
+const scriptDialogVisible = ref(false)
+const scriptContent = ref('')
+const scriptLoading = ref(false)
 
 const locustWebUrl = computed(() => {
   if (!currentDetail.value?.detail) return '#'
@@ -325,6 +373,90 @@ function downloadPerfScript() {
   a.click()
 }
 
+async function viewPerfScript() {
+  if (!currentDetail.value?.case_id) return
+  scriptDialogVisible.value = true
+  scriptLoading.value = true
+  scriptContent.value = ''
+  try {
+    const url = `/api/v1/results/perf-script/${currentDetail.value.case_id}`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${localStorage.getItem('token') || ''}` } })
+    if (res.ok) {
+      scriptContent.value = await res.text()
+    } else {
+      ElMessage.error('获取脚本失败')
+    }
+  } catch {
+    ElMessage.error('获取脚本失败')
+  } finally {
+    scriptLoading.value = false
+  }
+}
+
+// STATISTICS 表格数据：从 endpoints 中解析 Method 和 Name
+const perfTableData = computed(() => {
+  const endpoints = currentDetail.value?.detail?.stats?.endpoints
+  if (!endpoints) return []
+  return endpoints.map((ep: any) => {
+    const parts = (ep.name || '').split(' ', 2)
+    const type = parts.length > 1 ? parts[0] : 'GET'
+    const name = parts.length > 1 ? parts.slice(1).join(' ') : ep.name
+    const duration = currentDetail.value?.detail?.duration || 1
+    return {
+      ...ep,
+      type,
+      name,
+      avg_content_length: ep.avg_content_length || '-',
+      failures_per_sec: ep.failures ? (ep.failures / duration).toFixed(2) : '0.00',
+    }
+  })
+})
+
+// CHARTS 辅助：计算柱状图最大值
+const maxAvgMs = computed(() => {
+  const endpoints = currentDetail.value?.detail?.stats?.endpoints
+  if (!endpoints?.length) return 1
+  return Math.max(...endpoints.map((ep: any) => ep.avg_ms || 0), 1)
+})
+
+const maxRequests = computed(() => {
+  const endpoints = currentDetail.value?.detail?.stats?.endpoints
+  if (!endpoints?.length) return 1
+  return Math.max(...endpoints.map((ep: any) => ep.requests || 0), 1)
+})
+
+function getBarWidth(value: number, max: number): number {
+  return max > 0 ? Math.max((value / max) * 100, 2) : 0
+}
+
+// STATISTICS 汇总行
+function getPerfSummary(param: { columns: any[]; data: any[] }) {
+  const { columns, data } = param
+  const sums: string[] = []
+  columns.forEach((col, index) => {
+    if (index === 0) { sums[index] = 'Aggregated'; return }
+    if (index === 1) { sums[index] = ''; return }
+    const prop = col.property
+    if (!prop) { sums[index] = ''; return }
+    if (prop === 'type' || prop === 'name') { sums[index] = ''; return }
+    if (prop === 'avg_content_length') { sums[index] = '-'; return }
+    const values = data.map((item: any) => Number(item[prop]))
+    const validValues = values.filter((v: number) => !isNaN(v))
+    if (prop === 'rps' || prop === 'failures_per_sec') {
+      sums[index] = validValues.reduce((a: number, b: number) => a + b, 0).toFixed(2)
+    } else if (prop === 'median_ms' || prop === 'avg_ms') {
+      sums[index] = validValues.length ? (validValues.reduce((a: number, b: number) => a + b, 0) / validValues.length).toFixed(1) : '0'
+    } else if (prop === 'min_ms') {
+      sums[index] = validValues.length ? Math.min(...validValues).toString() : '0'
+    } else if (prop === 'max_ms') {
+      sums[index] = validValues.length ? Math.max(...validValues).toString() : '0'
+    } else {
+      sums[index] = validValues.reduce((a: number, b: number) => a + b, 0).toString()
+    }
+  })
+  return sums
+}
+
 async function syncAndOpenLocust() {
   if (!currentDetail.value?.case_id) return
   syncLoading.value = true
@@ -339,6 +471,15 @@ async function syncAndOpenLocust() {
   } finally {
     syncLoading.value = false
   }
+}
+
+function viewHistoricalResults() {
+  if (!currentDetail.value?.case_id) return
+  const host = window.location.hostname
+  const caseId = currentDetail.value.case_id
+  const taskId = currentDetail.value.task_id || ''
+  const token = localStorage.getItem('token') || ''
+  window.open(`http://${host}:8089/historical-results?case_id=${caseId}&task_id=${taskId}&token=${token}`, '_blank')
 }
 
 async function fetchData() {
@@ -442,6 +583,8 @@ onMounted(() => { fetchData(); fetchCreators() })
 .error-output :deep(textarea) { color:#f56c6c; }
 .error-message { padding:8px 12px; background:#fef0f0; border-radius:4px; border-left:3px solid #f56c6c; }
 .error-text { color:#f56c6c; }
+.warning-message { padding:8px 12px; background:#fdf6ec; border-radius:4px; border-left:3px solid #e6a23c; }
+.warning-text { color:#e6a23c; }
 
 /* 步骤时间轴样式 */
 .step-count { margin-left:12px; color:#909399; font-size:13px; }
@@ -473,4 +616,32 @@ onMounted(() => { fetchData(); fetchCreators() })
 .perf-param-value { display:block; font-size:15px; font-weight:600; color:#303133; }
 .text-danger { color:#f56c6c; }
 .text-primary { color:#409eff; }
+
+/* CHARTS 柱状图样式 */
+.charts-container { display:flex; gap:24px; margin-top:12px; }
+.chart-box { flex:1; background:#f5f7fa; border-radius:8px; padding:16px; }
+.chart-title { font-size:14px; font-weight:600; color:#303133; margin-bottom:12px; }
+.bar-chart { display:flex; flex-direction:column; gap:10px; }
+.bar-row { display:flex; align-items:center; gap:8px; }
+.bar-label { width:180px; font-size:12px; color:#606266; text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-shrink:0; }
+.bar-track { flex:1; height:22px; background:#e4e7ed; border-radius:4px; position:relative; overflow:hidden; display:flex; align-items:center; }
+.bar-fill { height:100%; border-radius:4px; transition:width 0.5s ease; min-width:2px; }
+.bar-fill-primary { background:linear-gradient(90deg, #409eff, #66b1ff); }
+.bar-fill-success { background:linear-gradient(90deg, #67c23a, #85ce61); }
+.bar-value { position:absolute; right:8px; font-size:11px; color:#303133; font-weight:600; }
+
+/* 脚本查看弹窗样式 */
+.script-code-block {
+  background:#1e1e1e;
+  color:#d4d4d4;
+  padding:16px;
+  border-radius:6px;
+  overflow:auto;
+  max-height:65vh;
+  font-family:'Courier New', Courier, monospace;
+  font-size:13px;
+  line-height:1.6;
+  white-space:pre;
+  tab-size:4;
+}
 </style>

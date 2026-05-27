@@ -91,6 +91,43 @@ async def list_results(
     })
 
 
+@router.get("/by-case/{case_id}", response_model=ResponseModel)
+async def get_results_by_case(case_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Return all test results for a specific case (used by Locust historical results page)."""
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_ID", "message": "无效的用例ID"})
+
+    case = (await db.execute(select(TestCase).where(TestCase.id == case_id, TestCase.deleted_at.is_(None)))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
+
+    results = (await db.execute(
+        select(TestResult).where(TestResult.case_id == case_id, TestResult.deleted_at.is_(None))
+        .order_by(TestResult.created_at.desc())
+    )).scalars().all()
+
+    result_list = []
+    for r in results:
+        result_list.append({
+            "id": str(r.id),
+            "task_id": str(r.task_id),
+            "status": r.status,
+            "duration_ms": r.duration_ms,
+            "detail": r.detail,
+            "started_at": str(r.started_at) if r.started_at else None,
+            "finished_at": str(r.finished_at) if r.finished_at else None,
+        })
+
+    return ResponseModel(data={
+        "case_id": case_id,
+        "case_name": case.name,
+        "case_type": case.type,
+        "results": result_list,
+    })
+
+
 @router.get("/perf-script/{case_id}")
 async def get_perf_script(case_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Return the Locust script for a performance case as a downloadable file."""

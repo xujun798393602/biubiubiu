@@ -586,8 +586,13 @@ class TaskExecutor:
 
             if proc.returncode == 0:
                 return {"status": ResultStatus.SUCCESS, "detail": detail}
+            elif proc.returncode == 1:
+                # Locust exit code 1 = test completed but had request failures (normal behavior)
+                detail["error"] = "测试完成，存在失败请求"
+                detail["stderr"] = stderr_text[-2000:]
+                return {"status": ResultStatus.FAILED, "detail": detail}
             else:
-                detail["error"] = f"Locust 执行失败，退出码: {proc.returncode}"
+                detail["error"] = f"Locust 执行异常，退出码: {proc.returncode}"
                 detail["stderr"] = stderr_text[-2000:]
                 return {"status": ResultStatus.FAILED, "detail": detail}
 
