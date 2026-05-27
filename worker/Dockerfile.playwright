@@ -1,10 +1,11 @@
-# Playwright Worker - UI testing with Chromium
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
-# Use Chinese mirrors for faster downloads
-RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+ARG PW_VER=1.47.0
+
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || \
     sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 
+# ✅ 只装 tini，不装浏览器
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     && rm -rf /var/lib/apt/lists/*
@@ -12,28 +13,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
-    httpx redis psutil playwright
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    httpx redis psutil playwright==${PW_VER}
 
-# Install Chromium browser with system deps
-RUN playwright install --with-deps chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV DISPLAY=:99
+ENV PYTHONUNBUFFERED=1
 
 COPY agent/ ./agent/
 
 RUN useradd -m -u 1000 worker && chown -R worker:worker /app
 USER worker
 
-ENV BACKEND_URL=http://backend:8000
-ENV REDIS_URL=redis://redis:6379/0
-ENV NODE_TYPE=PLAYWRIGHT
-ENV NODE_NAME=""
-ENV API_KEY=""
-ENV MAX_CONCURRENT=3
-ENV HEARTBEAT_INTERVAL=10
-ENV DISPLAY=:99
-ENV PYTHONUNBUFFERED=1
+HEALTHCHECK --interval=30s --timeout=10s \
+  CMD python -c "import redis; r = redis.from_url('${REDIS_URL}'); r.ping()" || exit 1
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import redis; r = redis.from_url('${REDIS_URL}'); r.ping()" || exit 1
-
-CMD ["python", "-m", "agent"]
+ENTRYPOINT ["tini", "--"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 & python -m agent"]

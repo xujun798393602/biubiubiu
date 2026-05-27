@@ -75,6 +75,7 @@ services:
     volumes:
       - ./data/uploads:/app/uploads:z
       - /opt/auto-test/logs/backend:/var/log/backend:z
+      - locust-scripts:/scripts:rw
     logging:
       driver: json-file
       options:
@@ -123,6 +124,11 @@ services:
       - auto-test-net
     profiles:
       - tools
+
+volumes:
+  locust-scripts:
+    external: true
+    name: tdd-auto-platform_locust-scripts
 
 networks:
   auto-test-net:

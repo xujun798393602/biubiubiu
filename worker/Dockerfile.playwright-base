@@ -1,0 +1,33 @@
+FROM python:3.11-slim-bookworm
+
+ARG PW_VER=1.47.0
+
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
+
+# ✅ 恢复 Xvfb（界面录制必须）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    libnss3 \
+    libnspr4 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libgbm1 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libasound2 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
+    playwright==${PW_VER}
+
+ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+RUN playwright install chromium
+
+CMD ["echo", "playwright-base with Xvfb ready"]

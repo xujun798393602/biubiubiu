@@ -53,3 +53,7 @@ export function exportResults(taskId: string, format: string) {
 export function createShareLink(taskId: string, data: any) {
   return request.post<any, any>(`/results/${taskId}/share`, data)
 }
+
+export function syncPerfScript(caseId: string) {
+  return request.post<any, any>(`/results/sync-perf-script/${caseId}`)
+}

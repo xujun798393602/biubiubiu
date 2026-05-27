@@ -2,6 +2,7 @@
 
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
@@ -88,6 +89,62 @@ async def list_results(
         "list": result_list,
         "pagination": {"page": page, "pageSize": pageSize, "total": total, "totalPages": (total + pageSize - 1) // pageSize},
     })
+
+
+@router.get("/perf-script/{case_id}")
+async def get_perf_script(case_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Return the Locust script for a performance case as a downloadable file."""
+    case = (await db.execute(select(TestCase).where(TestCase.id == case_id, TestCase.deleted_at.is_(None)))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
+    if case.type != "PERFORMANCE" or not case.perf_script:
+        raise HTTPException(status_code=400, detail={"code": "NOT_PERF_CASE", "message": "该用例不是性能压测类型或未配置脚本"})
+
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(
+        content=case.perf_script,
+        media_type="text/x-python",
+        headers={"Content-Disposition": f'attachment; filename="locust_{case_id[:8]}.py"'},
+    )
+
+
+@router.post("/sync-perf-script/{case_id}", response_model=ResponseModel)
+async def sync_perf_script(case_id: str, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """Sync a performance case's Locust script to the shared volume for the Locust Web UI."""
+    # Validate UUID format (prevents path traversal)
+    try:
+        uuid.UUID(case_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_ID", "message": "无效的用例ID"})
+
+    case = (await db.execute(select(TestCase).where(TestCase.id == case_id, TestCase.deleted_at.is_(None)))).scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail={"code": "CASE_NOT_FOUND", "message": "用例不存在"})
+    if case.type != "PERFORMANCE" or not case.perf_script:
+        raise HTTPException(status_code=400, detail={"code": "NOT_PERF_CASE", "message": "该用例不是性能压测类型或未配置脚本"})
+
+    scripts_dir = Path("/scripts")
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    script_path = scripts_dir / f"{case_id}.py"
+    meta_path = scripts_dir / f"{case_id}.json"
+
+    try:
+        script_path.write_text(case.perf_script, encoding="utf-8")
+        # Write parameter metadata for the Locust webapp
+        import json
+        meta = {
+            "case_id": case_id,
+            "perf_url": case.perf_url or "",
+            "perf_vusers": case.perf_vusers or 10,
+            "perf_spawn_rate": case.perf_spawn_rate or 1,
+            "perf_duration": case.perf_duration or 60,
+            "case_name": case.name or "",
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail={"code": "WRITE_FAILED", "message": f"写入脚本文件失败: {e}"})
+
+    return ResponseModel(data={"status": "ok", "case_id": case_id})
 
 
 @router.get("/api/{result_id}", response_model=ResponseModel)
