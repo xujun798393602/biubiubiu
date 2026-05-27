@@ -317,12 +317,18 @@ class LocustExecutor(BaseExecutor):
 
             parsed_stats = self._parse_locust_stats(stdout_text)
 
+            # Include stderr in output for debugging (connection errors, etc.)
+            combined_output = stdout_text
+            if stderr_text.strip():
+                combined_output += "\n--- STDERR ---\n" + stderr_text
+
             detail = {
                 "exit_code": proc.returncode,
                 "vusers": vusers,
                 "spawn_rate": spawn_rate,
                 "duration": duration,
-                "output": stdout_text[-3000:],
+                "perf_url": perf_url,
+                "output": combined_output[-3000:],
                 "stats": parsed_stats,
             }
 
@@ -330,12 +336,14 @@ class LocustExecutor(BaseExecutor):
                 return {"status": "SUCCESS", "detail": detail}
             elif proc.returncode == 1:
                 # Locust exit code 1 = test completed but had request failures (normal behavior)
-                detail["error"] = "测试完成，存在失败请求"
-                detail["stderr"] = stderr_text[-2000:]
+                if parsed_stats.get("total") and parsed_stats["total"].get("requests", 0) > 0:
+                    detail["error"] = "测试完成，存在失败请求"
+                else:
+                    # Exit code 1 with 0 requests = connection/script error
+                    detail["error"] = "Locust 执行失败，请检查目标 URL 是否可达、脚本是否正确"
                 return {"status": "FAILED", "detail": detail}
             else:
                 detail["error"] = f"Locust 执行异常，退出码: {proc.returncode}"
-                detail["stderr"] = stderr_text[-2000:]
                 return {"status": "FAILED", "detail": detail}
 
         except asyncio.TimeoutError:

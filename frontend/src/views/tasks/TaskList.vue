@@ -194,6 +194,10 @@
               <div class="detail-item">
                 <span class="detail-label">执行参数:</span>
                 <div class="perf-params">
+                  <div class="perf-param-item" style="min-width:300px">
+                    <span class="perf-param-label">目标 URL</span>
+                    <span class="perf-param-value" style="font-size:13px;word-break:break-all">{{ currentDetail.detail.perf_url || 'N/A' }}</span>
+                  </div>
                   <div class="perf-param-item">
                     <span class="perf-param-label">并发用户</span>
                     <span class="perf-param-value">{{ currentDetail.detail.vusers }}</span>
@@ -295,7 +299,7 @@
                     点击"重新执行"将同步脚本到 Locust Web UI 并打开，可手动启动压测
                   </span>
                 </div>
-                <el-input v-if="currentDetail.detail.output" type="textarea" :model-value="currentDetail.detail.output" :rows="4" readonly style="margin-top:8px" />
+                <el-input v-if="currentDetail.detail.output" type="textarea" :model-value="currentDetail.detail.output" :rows="8" readonly style="margin-top:8px" />
               </div>
             </template>
             <template v-else>
@@ -314,6 +318,14 @@
 
     <!-- 查看脚本弹窗 -->
     <el-dialog v-model="scriptDialogVisible" title="压测脚本查看" width="65%" top="5vh" destroy-on-close>
+      <template #header>
+        <div style="display:flex;align-items:center;justify-content:space-between;width:100%;padding-right:30px;">
+          <span>压测脚本查看</span>
+          <el-button size="small" type="primary" @click="copyScript" :disabled="!scriptContent">
+            <el-icon><CopyDocument /></el-icon> 复制脚本
+          </el-button>
+        </div>
+      </template>
       <div v-loading="scriptLoading" style="min-height:200px;">
         <pre v-if="scriptContent" class="script-code-block"><code>{{ scriptContent }}</code></pre>
         <el-empty v-else-if="!scriptLoading" description="暂无脚本内容" />
@@ -325,7 +337,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Document, Link, Search, Download, TrendCharts } from '@element-plus/icons-vue'
+import { Document, Link, Search, Download, TrendCharts, CopyDocument } from '@element-plus/icons-vue'
 import { getTaskList, getTaskCreators, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
 import { getResultOverview, getResultList, getResultDetail, syncPerfScript } from '@/api/results'
@@ -390,6 +402,25 @@ async function viewPerfScript() {
     ElMessage.error('获取脚本失败')
   } finally {
     scriptLoading.value = false
+  }
+}
+
+async function copyScript() {
+  if (!scriptContent.value) return
+  try {
+    await navigator.clipboard.writeText(scriptContent.value)
+    ElMessage.success('脚本已复制到剪贴板')
+  } catch {
+    // Fallback for non-HTTPS
+    const textarea = document.createElement('textarea')
+    textarea.value = scriptContent.value
+    textarea.style.position = 'fixed'
+    textarea.style.opacity = '0'
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    ElMessage.success('脚本已复制到剪贴板')
   }
 }
 
