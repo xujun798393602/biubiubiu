@@ -330,8 +330,10 @@ async function syncAndOpenLocust() {
   syncLoading.value = true
   try {
     await syncPerfScript(currentDetail.value.case_id)
-    ElMessage.success('脚本已同步到 Locust')
-    window.open(locustWebUrl.value, '_blank')
+    ElMessage.success('脚本已同步，正在加载到 Locust...')
+    const host = window.location.hostname
+    const caseId = currentDetail.value.case_id
+    window.open(`http://${host}:8089/auto-load?case_id=${caseId}`, '_blank')
   } catch {
     ElMessage.error('同步脚本到 Locust 失败')
   } finally {
