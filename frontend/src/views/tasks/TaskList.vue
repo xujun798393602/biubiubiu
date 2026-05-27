@@ -248,15 +248,15 @@
               <div class="detail-item">
                 <span class="detail-label">压测脚本:</span>
                 <div style="margin-top:8px; display:flex; align-items:center; gap:12px;">
-                  <el-button type="primary" size="small" @click="downloadPerfScript">
-                    <el-icon><Download /></el-icon> 下载压测脚本
+                  <el-button type="primary" size="small" :loading="syncLoading" @click="syncAndOpenLocust">
+                    <el-icon><Link /></el-icon> 同步到 Locust 并打开
                   </el-button>
-                  <el-link type="primary" :href="locustWebUrl" target="_blank" :underline="false">
-                    <el-icon><Link /></el-icon> 打开 Locust Web UI
-                  </el-link>
+                  <el-button size="small" @click="downloadPerfScript">
+                    <el-icon><Download /></el-icon> 下载脚本
+                  </el-button>
                 </div>
                 <div style="margin-top:8px; color:#909399; font-size:12px;">
-                  1. 点击"下载压测脚本"获取 .py 文件 &nbsp; 2. 打开 Locust Web UI &nbsp; 3. 在页面上传脚本并填写目标地址后启动压测
+                  点击"同步到 Locust 并打开"将自动同步脚本到 Locust Web UI，无需手动导入
                 </div>
                 <el-input v-if="currentDetail.detail.output" type="textarea" :model-value="currentDetail.detail.output" :rows="4" readonly style="margin-top:8px" />
               </div>
@@ -283,7 +283,7 @@ import { ElMessage } from 'element-plus'
 import { Document, Link, Search, Download } from '@element-plus/icons-vue'
 import { getTaskList, getTaskCreators, deleteTask, startTask, cancelTask } from '@/api/tasks'
 import type { TaskItem, TaskStatus, TaskPriority } from '@/api/tasks'
-import { getResultOverview, getResultList, getResultDetail } from '@/api/results'
+import { getResultOverview, getResultList, getResultDetail, syncPerfScript } from '@/api/results'
 import type { ResultOverview, ResultItem, ResultDetail } from '@/api/results'
 
 const loading = ref(false)
@@ -305,11 +305,13 @@ const resultPagination = reactive({ page: 1, pageSize: 20, total: 0 })
 const detailDialogVisible = ref(false)
 const detailLoading = ref(false)
 const currentDetail = ref<ResultDetail | null>(null)
+const syncLoading = ref(false)
 
 const locustWebUrl = computed(() => {
   if (!currentDetail.value?.detail) return '#'
   const host = window.location.hostname
-  return `http://${host}:8089`
+  const caseId = currentDetail.value.case_id
+  return caseId ? `http://${host}:8089/?case_id=${caseId}` : `http://${host}:8089`
 })
 
 function formatDate(dateStr: string | null) { return dateStr ? new Date(dateStr).toLocaleString('zh-CN') : '-' }
@@ -321,6 +323,20 @@ function downloadPerfScript() {
   a.href = url
   a.download = `locust_${currentDetail.value.case_id.slice(0, 8)}.py`
   a.click()
+}
+
+async function syncAndOpenLocust() {
+  if (!currentDetail.value?.case_id) return
+  syncLoading.value = true
+  try {
+    await syncPerfScript(currentDetail.value.case_id)
+    ElMessage.success('脚本已同步到 Locust')
+    window.open(locustWebUrl.value, '_blank')
+  } catch {
+    ElMessage.error('同步脚本到 Locust 失败')
+  } finally {
+    syncLoading.value = false
+  }
 }
 
 async function fetchData() {

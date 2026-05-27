@@ -1,4 +1,3 @@
-# worker/Dockerfile.playwright
 FROM python:3.11-slim-bookworm
 
 ARG PW_VER=1.47.0
@@ -6,7 +5,7 @@ ARG PW_VER=1.47.0
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || \
     sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list 2>/dev/null || true
 
-# 只装 tini，不装 Xvfb / 不装浏览器依赖
+# ✅ 只装 tini，不装浏览器
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini \
     && rm -rf /var/lib/apt/lists/*
@@ -17,8 +16,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ \
     httpx redis psutil playwright==${PW_VER}
 
-# 引用共享浏览器，不下载
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV DISPLAY=:99
 ENV PYTHONUNBUFFERED=1
 
 COPY agent/ ./agent/
@@ -26,8 +25,8 @@ COPY agent/ ./agent/
 RUN useradd -m -u 1000 worker && chown -R worker:worker /app
 USER worker
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python -c "import redis; r = redis.from_url('${REDIS_URL}'); r.ping()" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s \
+  CMD python -c "import redis; r = redis.from_url('${REDIS_URL}'); r.ping()" || exit 1
 
 ENTRYPOINT ["tini", "--"]
-CMD ["python", "-m", "agent"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 & python -m agent"]

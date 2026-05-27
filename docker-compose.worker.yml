@@ -33,7 +33,7 @@ services:
           memory: '${LOCUST_MEMORY_LIMIT:-4G}'
 
   # =========================
-  # Locust Web UI
+  # Locust Web UI (with dynamic script loading)
   # =========================
   locust-web:
     build:
@@ -41,17 +41,19 @@ services:
       dockerfile: Dockerfile.locust
     container_name: locust-web
     restart: unless-stopped
-    entrypoint: ["locust"]
-    command: ["-f", "/scripts/empty_locustfile.py", "--web-host", "0.0.0.0", "--web-port", "8089"]
+    user: root
+    entrypoint: ["python", "/app/locust_webapp.py"]
     ports:
       - "8089:8089"
+    environment:
+      SCRIPTS_DIR: /scripts
     networks:
       - auto-test-net
     volumes:
-      - ./worker/scripts:/scripts:ro
+      - locust-scripts:/scripts:rw
 
   # ========================================
-  # ✅ Playwright 浏览器基础镜像（新增）
+  # ✅ Playwright 浏览器基础镜像（含 Xvfb）
   # ========================================
   playwright-base:
     image: tdd/playwright-base:1.47.0
@@ -64,7 +66,7 @@ services:
       - auto-test-net
 
   # ========================================
-  # ✅ Playwright UI 测试 Worker（改造）
+  # ✅ Playwright UI 测试 Worker（有界面）
   # ========================================
   playwright-worker-1:
     build:
@@ -82,7 +84,7 @@ services:
       API_KEY: ${PLAYWRIGHT_WORKER_API_KEY:-}
       MAX_CONCURRENT: ${PLAYWRIGHT_MAX_CONCURRENT:-3}
       HEARTBEAT_INTERVAL: 10
-      # ✅ 删除 DISPLAY（不再使用 Xvfb）
+      DISPLAY: ":99"
     networks:
       - auto-test-net
     volumes:
@@ -94,7 +96,7 @@ services:
           cpus: '${PLAYWRIGHT_CPU_LIMIT:-2}'
           memory: '${PLAYWRIGHT_MEMORY_LIMIT:-4G}'
 
-  # ✅ 可选：多 worker 并发（直接复制即可）
+  # ✅ 多 worker 并发（按需启用）
   # playwright-worker-2:
   #   <<: *playwright-worker-1
   #   container_name: playwright-worker-2
@@ -106,6 +108,9 @@ services:
 # =========================
 volumes:
   playwright-browsers:
+  locust-scripts:
+    external: true
+    name: tdd-auto-platform_locust-scripts
 
 # =========================
 # Networks

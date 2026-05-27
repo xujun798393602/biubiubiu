@@ -13,9 +13,10 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com \
-    httpx redis psutil locust
+    httpx redis psutil locust requests
 
 COPY agent/ ./agent/
+COPY scripts/locust_webapp.py /app/locust_webapp.py
 
 RUN useradd -m -u 1000 worker && chown -R worker:worker /app
 USER worker
